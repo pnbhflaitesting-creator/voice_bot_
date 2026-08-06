@@ -42,9 +42,19 @@ class Settings:
     # STT model. "gpt-4o-mini-transcribe" is fast + cheap; "whisper-1" is the
     # most widely compatible fallback.
     stt_model: str = field(default_factory=lambda: _get("STT_MODEL", "gpt-4o-mini-transcribe"))
-    # TTS model + voice. Voices: alloy, echo, fable, onyx, nova, shimmer, ...
+    # ISO-639-1 language hint (e.g. "en", "sk", "de"). Pinning the language
+    # greatly improves accuracy AND speed on short clips vs. auto-detection.
+    # Leave empty for auto-detect.
+    stt_language: str = field(default_factory=lambda: _get("STT_LANGUAGE", ""))
+    # Optional biasing prompt: names/jargon the model should spell correctly.
+    stt_prompt: str = field(default_factory=lambda: _get("STT_PROMPT", ""))
+    # TTS model + voice. "tts-1" has the lowest time-to-first-audio;
+    # "gpt-4o-mini-tts" sounds better but starts a bit slower.
     tts_model: str = field(default_factory=lambda: _get("TTS_MODEL", "gpt-4o-mini-tts"))
     tts_voice: str = field(default_factory=lambda: _get("TTS_VOICE", "alloy"))
+    tts_speed: float = field(default_factory=lambda: _get_float("TTS_SPEED", 1.0))
+    # Print a per-turn latency breakdown (stt / llm / tts).
+    show_timings: bool = field(default_factory=lambda: _get_bool("SHOW_TIMINGS", True))
 
     # ---- Gemini (LLM) -------------------------------------------------------
     # The user already has a Gemini endpoint. We talk to it through the OpenAI
@@ -92,7 +102,7 @@ class Settings:
     # A turn only starts after this much continuous speech (debounces noise).
     min_speech_ms: int = field(default_factory=lambda: _get_int("MIN_SPEECH_MS", 200))
     # A turn ends after this much trailing silence (the "end of turn" pause).
-    silence_hangover_ms: int = field(default_factory=lambda: _get_int("SILENCE_HANGOVER_MS", 700))
+    silence_hangover_ms: int = field(default_factory=lambda: _get_int("SILENCE_HANGOVER_MS", 500))
     # Ignore turns shorter than this after trimming (filters coughs/clicks).
     min_turn_ms: int = field(default_factory=lambda: _get_int("MIN_TURN_MS", 350))
     # Keep this much audio before detected speech start (avoids clipped words).

@@ -31,8 +31,15 @@ class SpeechToText:
         """Return the transcript of a float32 mono @ 16 kHz utterance."""
         wav_bytes = _to_wav_bytes(audio, settings.input_sample_rate)
         # The SDK accepts a (filename, bytes, mimetype) tuple as the file.
-        resp = await self._client.audio.transcriptions.create(
-            model=settings.stt_model,
-            file=("speech.wav", wav_bytes, "audio/wav"),
-        )
+        kwargs: dict = {
+            "model": settings.stt_model,
+            "file": ("speech.wav", wav_bytes, "audio/wav"),
+        }
+        # Pinning the language avoids wrong auto-detection on short clips
+        # (big accuracy + latency win); the prompt biases spelling of names.
+        if settings.stt_language:
+            kwargs["language"] = settings.stt_language
+        if settings.stt_prompt:
+            kwargs["prompt"] = settings.stt_prompt
+        resp = await self._client.audio.transcriptions.create(**kwargs)
         return (resp.text or "").strip()

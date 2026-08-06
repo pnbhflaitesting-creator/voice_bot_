@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import AsyncIterator
 
 import numpy as np
@@ -25,31 +26,58 @@ from .stt import SpeechToText
 from .tts import TextToSpeech
 from .vad import TurnDetector, TurnEvent
 
-# Split streamed text on sentence-ending punctuation so we can start speaking
-# before the LLM has finished the whole reply.
-_SENTENCE_END = re.compile(r"(.+?[.!?…]+[\s\"')\]]*)", re.DOTALL)
+# Boundaries: punctuation followed by whitespace/closing bracket. Requiring the
+# trailing whitespace means we only split on a *confirmed* boundary (so "3.14"
+# or "e.g" mid-token is never cut) and never on a period we haven't seen past.
+_SENTENCE_BOUNDARY = re.compile(r"[.!?…]+[\s\"')\]]+")
+# The first chunk may also break at a clause boundary (comma/semicolon/colon).
+_CLAUSE_BOUNDARY = re.compile(r"[.!?…,;:]+[\s\"')\]]+")
+# Emit the first chunk at the earliest boundary at or past this length, so the
+# bot starts talking quickly without sounding choppy.
+_FIRST_CHUNK_MIN_CHARS = 24
 # Speak an in-progress buffer once it gets this long even without punctuation.
 _MAX_CHARS_BEFORE_FLUSH = 200
 
 
+def _next_break(buffer: str, first: bool) -> int | None:
+    """Index just past the first usable boundary in ``buffer``, or None.
+
+    For the first chunk we break at the earliest clause boundary at or past
+    ``_FIRST_CHUNK_MIN_CHARS`` (low latency); afterwards only at sentence ends
+    (natural prosody). A boundary counts only if some text follows it.
+    """
+    pattern = _CLAUSE_BOUNDARY if first else _SENTENCE_BOUNDARY
+    min_chars = _FIRST_CHUNK_MIN_CHARS if first else 1
+    for match in pattern.finditer(buffer):
+        end = match.end()
+        if end >= min_chars and end < len(buffer):
+            return end
+    return None
+
+
 async def _sentence_chunks(tokens: AsyncIterator[str]) -> AsyncIterator[str]:
-    """Regroup a stream of LLM tokens into speakable sentence-sized chunks."""
+    """Regroup a stream of LLM tokens into speakable chunks.
+
+    The first chunk is emitted at the earliest clause boundary (to minimise
+    time-to-first-audio); later chunks are full sentences (for natural prosody).
+    """
     buffer = ""
+    first = True
     async for token in tokens:
         buffer += token
-        # Emit every complete sentence currently in the buffer.
         while True:
-            match = _SENTENCE_END.match(buffer)
-            if match and (match.end() < len(buffer) or buffer.endswith((" ", "\n"))):
-                chunk = match.group(1).strip()
-                buffer = buffer[match.end():]
-                if chunk:
-                    yield chunk
-                continue
-            break
+            idx = _next_break(buffer, first)
+            if idx is None:
+                break
+            chunk = buffer[:idx].strip()
+            buffer = buffer[idx:].lstrip()
+            if chunk:
+                first = False
+                yield chunk
         if len(buffer) >= _MAX_CHARS_BEFORE_FLUSH and " " in buffer:
             head, buffer = buffer.rsplit(" ", 1)
             if head.strip():
+                first = False
                 yield head.strip()
     if buffer.strip():
         yield buffer.strip()
@@ -115,19 +143,42 @@ class VoiceBot:
                 self._response_task = asyncio.create_task(self._handle_turn(result.audio))
 
     async def _handle_turn(self, audio: np.ndarray) -> None:
+        t0 = time.perf_counter()
         try:
             transcript = await self._stt.transcribe(audio)
             if not transcript:
                 return
+            t_stt = time.perf_counter()
             print(f"🧑 You:  {transcript}", flush=True)
             print("🤖 Bot:  ", end="", flush=True)
 
-            tokens = self._llm.stream_reply(transcript)
-            async for sentence in _sentence_chunks(tokens):
+            t_first_token: float | None = None
+            t_first_audio: float | None = None
+
+            async def _timed_tokens() -> AsyncIterator[str]:
+                nonlocal t_first_token
+                async for tok in self._llm.stream_reply(transcript):
+                    if t_first_token is None:
+                        t_first_token = time.perf_counter()
+                    yield tok
+
+            async for sentence in _sentence_chunks(_timed_tokens()):
                 print(sentence + " ", end="", flush=True)
                 async for pcm in self._tts.stream(sentence):
+                    if t_first_audio is None:
+                        t_first_audio = time.perf_counter()
                     self._speaker.play(pcm)
             print(flush=True)
+
+            if settings.show_timings and t_first_audio is not None:
+                stt_ms = (t_stt - t0) * 1000
+                llm_ms = ((t_first_token or t_stt) - t_stt) * 1000
+                tts_ms = (t_first_audio - (t_first_token or t_stt)) * 1000
+                print(
+                    f"⏱  stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
+                    f"tts {tts_ms:.0f}ms · to-first-audio {(t_first_audio - t0) * 1000:.0f}ms",
+                    flush=True,
+                )
 
             # Wait for all queued audio to finish playing before listening again.
             done = self._speaker.mark_end()

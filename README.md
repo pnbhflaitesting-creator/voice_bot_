@@ -77,6 +77,58 @@ Everything is environment-driven (see `.env.example`). Highlights:
 | `TTS_MODEL` / `TTS_VOICE` | `gpt-4o-mini-tts` / `alloy` | OpenAI TTS |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | LLM model name |
 
+## Speeding it up & fixing accuracy
+
+Every turn prints a latency breakdown (`SHOW_TIMINGS=true`):
+
+```
+⏱  stt 620ms · llm 410ms · tts 300ms · to-first-audio 1330ms
+```
+
+Use it to see *where* the time goes, then tune:
+
+**Accuracy — do this first.** If the bot mishears you, it's almost always
+language auto-detection guessing wrong on a short clip. **Pin your language:**
+
+```bash
+STT_LANGUAGE=en          # or sk, de, es, fr, ...
+# STT_PROMPT=names, jargon, product terms it keeps misspelling
+```
+
+**Latency levers, biggest first:**
+
+| Lever | Change | Effect |
+| --- | --- | --- |
+| End-of-turn wait | `SILENCE_HANGOVER_MS=400` | −100–300 ms dead time before every reply (too low = it cuts you off mid-pause) |
+| TTS model | `TTS_MODEL=tts-1` | Lower time-to-first-audio than `gpt-4o-mini-tts` |
+| LLM model | `GEMINI_MODEL=gemini-2.0-flash-lite` | Faster first token than `flash` |
+| STT language | `STT_LANGUAGE=en` | Faster + more accurate STT |
+| Speech rate | `TTS_SPEED=1.1` | Bot talks faster |
+
+A good **low-latency profile**:
+
+```bash
+SILENCE_HANGOVER_MS=400
+STT_LANGUAGE=en
+TTS_MODEL=tts-1
+GEMINI_MODEL=gemini-2.0-flash-lite
+```
+
+### Want it dramatically faster? Consider a realtime/live API
+
+This project uses three separate network hops (STT → LLM → TTS), so ~1–1.5 s
+to first audio is about the floor. If you want sub-500 ms conversational
+latency, the architecture to switch to is a **speech-to-speech "live" API**,
+which streams audio in and out of a single session:
+
+- **Gemini Live API** — keeps your Gemini LLM, does STT+TTS natively in one
+  streaming connection. Best fit since you're already on Gemini. (This replaces
+  OpenAI STT/TTS.)
+- **OpenAI Realtime API** — same idea, but the model is OpenAI's, not Gemini.
+
+Those trade the "mix and match providers" flexibility of this pipeline for much
+lower latency. If you'd like, this repo can be adapted to Gemini Live.
+
 ## Project layout
 
 ```

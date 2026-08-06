@@ -27,6 +27,7 @@ class TextToSpeech:
             voice=settings.tts_voice,
             input=text,
             response_format="pcm",
+            speed=settings.tts_speed,
         ) as response:
             async for chunk in response.iter_bytes(chunk_size=4096):
                 if chunk:
