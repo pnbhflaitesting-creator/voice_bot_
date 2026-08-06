@@ -28,6 +28,32 @@ class GeminiLLM:
     def reset(self) -> None:
         self._history = [{"role": "system", "content": settings.system_prompt}]
 
+    def _create_kwargs(self, messages: list[dict[str, str]], **overrides) -> dict:
+        kwargs: dict = {
+            "model": settings.gemini_model,
+            "messages": messages,
+            "max_tokens": settings.max_reply_tokens,
+        }
+        # Disable/limit Gemini 2.5 "thinking" for a faster first token. Sent via
+        # extra_body so the OpenAI SDK forwards it raw (it otherwise validates
+        # reasoning_effort against a fixed set and may reject "none").
+        if settings.gemini_reasoning_effort:
+            kwargs["extra_body"] = {"reasoning_effort": settings.gemini_reasoning_effort}
+        kwargs.update(overrides)
+        return kwargs
+
+    async def warmup(self) -> None:
+        """Establish the TLS connection and warm the model path so the first
+        real turn doesn't pay cold-start latency. Errors are ignored."""
+        try:
+            await self._client.chat.completions.create(
+                **self._create_kwargs(
+                    [{"role": "user", "content": "hi"}], max_tokens=1, stream=False
+                )
+            )
+        except Exception:
+            pass
+
     async def stream_reply(self, user_text: str) -> AsyncIterator[str]:
         """Append the user's turn and yield the assistant reply token by token.
 
@@ -36,9 +62,7 @@ class GeminiLLM:
         self._history.append({"role": "user", "content": user_text})
 
         stream = await self._client.chat.completions.create(
-            model=settings.gemini_model,
-            messages=self._history,
-            stream=True,
+            **self._create_kwargs(self._history, stream=True)
         )
 
         pieces: list[str] = []

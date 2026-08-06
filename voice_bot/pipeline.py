@@ -101,12 +101,26 @@ class VoiceBot:
         self._response_task: asyncio.Task | None = None
         self._bot_speaking = False
 
+    async def _warmup(self) -> None:
+        """Open connections to both APIs up front so the FIRST turn doesn't pay
+        TLS/DNS/model cold-start (often several seconds). Runs concurrently."""
+        async def warm_openai() -> None:
+            try:
+                await self._openai.models.list()  # cheap, warms api.openai.com
+            except Exception:
+                pass
+
+        await asyncio.gather(warm_openai(), self._llm.warmup())
+
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
         self._mic = MicrophoneStream(loop, self._frame_queue)
         self._speaker.start()
-        self._mic.start()
 
+        print("⏳ Warming up connections…", flush=True)
+        await self._warmup()
+
+        self._mic.start()
         print("🎙️  Listening… (speak into the mic, Ctrl+C to quit)\n", flush=True)
         try:
             await self._listen_loop()
@@ -174,8 +188,9 @@ class VoiceBot:
                 stt_ms = (t_stt - t0) * 1000
                 llm_ms = ((t_first_token or t_stt) - t_stt) * 1000
                 tts_ms = (t_first_audio - (t_first_token or t_stt)) * 1000
+                clip_s = len(audio) / settings.input_sample_rate
                 print(
-                    f"⏱  stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
+                    f"⏱  clip {clip_s:.1f}s · stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
                     f"tts {tts_ms:.0f}ms · to-first-audio {(t_first_audio - t0) * 1000:.0f}ms",
                     flush=True,
                 )

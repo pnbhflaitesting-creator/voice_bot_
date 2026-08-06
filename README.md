@@ -99,20 +99,32 @@ STT_LANGUAGE=en          # or sk, de, es, fr, ...
 
 | Lever | Change | Effect |
 | --- | --- | --- |
+| **STT model** | `STT_MODEL=gpt-4o-mini-transcribe` | **`whisper-1` is ~3–5× slower — never use it for real-time** |
+| Gemini thinking | `GEMINI_REASONING_EFFORT=none` | 2.5 models "think" before replying by default; this is a big first-token win |
 | End-of-turn wait | `SILENCE_HANGOVER_MS=400` | −100–300 ms dead time before every reply (too low = it cuts you off mid-pause) |
+| LLM model | `GEMINI_MODEL=gemini-2.5-flash-lite` | Faster first token than `flash` |
 | TTS model | `TTS_MODEL=tts-1` | Lower time-to-first-audio than `gpt-4o-mini-tts` |
-| LLM model | `GEMINI_MODEL=gemini-2.0-flash-lite` | Faster first token than `flash` |
+| Reply length | `MAX_REPLY_TOKENS=200` | Shorter replies finish sooner |
 | STT language | `STT_LANGUAGE=en` | Faster + more accurate STT |
-| Speech rate | `TTS_SPEED=1.1` | Bot talks faster |
+
+Connections are warmed at startup so the *first* turn isn't penalised by
+cold-start TLS/DNS.
 
 A good **low-latency profile**:
 
 ```bash
-SILENCE_HANGOVER_MS=400
+STT_MODEL=gpt-4o-mini-transcribe      # NOT whisper-1
 STT_LANGUAGE=en
+GEMINI_MODEL=gemini-2.5-flash-lite    # or gemini-2.0-flash
+GEMINI_REASONING_EFFORT=none          # disable 2.5 "thinking"
 TTS_MODEL=tts-1
-GEMINI_MODEL=gemini-2.0-flash-lite
+SILENCE_HANGOVER_MS=400
 ```
+
+> ⚠️ Your `whisper-1 → 8.7 s` result is exactly the trap: `whisper-1` is the
+> slowest option. `gpt-4o-mini-transcribe` + warmed connections typically brings
+> STT under ~1.5 s. If it's *still* slow after switching, your network latency to
+> the API is the floor — see the live-API note below.
 
 ### Want it dramatically faster? Consider a realtime/live API
 

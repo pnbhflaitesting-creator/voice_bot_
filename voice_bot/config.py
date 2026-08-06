@@ -68,6 +68,15 @@ class Settings:
         )
     )
     gemini_model: str = field(default_factory=lambda: _get("GEMINI_MODEL", "gemini-2.0-flash"))
+    # Gemini 2.5 models "think" before answering by default, adding latency and
+    # tokens. For a voice bot we want the fastest first token: "none" disables
+    # thinking. Values: none/low/medium/high, or empty to not send the param
+    # (use empty if your endpoint/proxy rejects it).
+    gemini_reasoning_effort: str = field(
+        default_factory=lambda: _get("GEMINI_REASONING_EFFORT", "none")
+    )
+    # Cap the reply length so the LLM doesn't ramble (faster, more responsive).
+    max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 200))
     system_prompt: str = field(
         default_factory=lambda: _get(
             "SYSTEM_PROMPT",
