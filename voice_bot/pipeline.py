@@ -17,13 +17,12 @@ import time
 from collections.abc import AsyncIterator
 
 import numpy as np
-from openai import AsyncOpenAI
 
 from .audio_io import MicrophoneStream, SpeakerStream
 from .config import settings
-from .llm import GeminiLLM
-from .stt import SpeechToText
-from .tts import TextToSpeech
+from .llm import create_llm
+from .stt import create_stt
+from .tts import create_tts
 from .vad import TurnDetector, TurnEvent
 
 # Boundaries: punctuation followed by whitespace/closing bracket. Requiring the
@@ -85,12 +84,17 @@ async def _sentence_chunks(tokens: AsyncIterator[str]) -> AsyncIterator[str]:
 
 class VoiceBot:
     def __init__(self) -> None:
-        # One OpenAI client for STT + TTS.
-        self._openai = AsyncOpenAI(api_key=settings.openai_api_key)
-        self._stt = SpeechToText(self._openai)
-        self._tts = TextToSpeech(self._openai)
-        self._llm = GeminiLLM()
+        # Providers are chosen by env (STT_PROVIDER / TTS_PROVIDER / LLM_PROVIDER).
+        self._stt = create_stt()
+        self._tts = create_tts()
+        self._llm = create_llm()
         self._vad = TurnDetector()
+
+        print(
+            f"🔌 STT={settings.stt_provider} · TTS={settings.tts_provider} · "
+            f"LLM={settings.llm_provider}",
+            flush=True,
+        )
 
         self._speaker = SpeakerStream()
         self._frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=200)
@@ -102,15 +106,11 @@ class VoiceBot:
         self._bot_speaking = False
 
     async def _warmup(self) -> None:
-        """Open connections to both APIs up front so the FIRST turn doesn't pay
-        TLS/DNS/model cold-start (often several seconds). Runs concurrently."""
-        async def warm_openai() -> None:
-            try:
-                await self._openai.models.list()  # cheap, warms api.openai.com
-            except Exception:
-                pass
-
-        await asyncio.gather(warm_openai(), self._llm.warmup())
+        """Open connections to all providers up front so the FIRST turn doesn't
+        pay TLS/DNS/model cold-start (often several seconds). Runs concurrently."""
+        await asyncio.gather(
+            self._stt.warmup(), self._tts.warmup(), self._llm.warmup()
+        )
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -230,4 +230,8 @@ class VoiceBot:
         if self._mic:
             self._mic.stop()
         self._speaker.close()
-        await self._openai.close()
+        for provider in (self._stt, self._tts, self._llm):
+            try:
+                await provider.aclose()
+            except Exception:
+                pass

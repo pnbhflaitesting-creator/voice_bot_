@@ -1,12 +1,17 @@
 # Real-time Python Voice Bot
 
-A fully local-driving, real-time voice assistant in **pure Python**:
+A real-time voice assistant in **pure Python** with **swappable providers** for
+each stage:
 
-- 🎧 **Silero VAD** for voice-activity detection **and turn-taking** (knows when you started and finished talking)
-- 📝 **OpenAI** for **Speech-to-Text** (transcription models)
-- 🧠 **Gemini** for the **LLM** (through your existing endpoint)
-- 🔊 **OpenAI** for **Text-to-Speech** (streamed)
-- ⛓️ Token-streaming + sentence-chunked TTS for low latency, plus **barge-in** (interrupt the bot by speaking)
+| Stage | Providers (pick one via `.env`) |
+| --- | --- |
+| 🎧 **VAD / turn-taking** | Silero VAD |
+| 📝 **STT** | `openai` · `deepgram` · `elevenlabs` |
+| 🧠 **LLM** | `gemini` · `openai` |
+| 🔊 **TTS** | `openai` · `deepgram` · `elevenlabs` |
+
+Token-streaming + sentence-chunked TTS for low latency, plus **barge-in**
+(interrupt the bot by speaking).
 
 ```
 🎙️ mic ─▶ Silero VAD (turn detection) ─▶ OpenAI STT ─▶ Gemini LLM (streamed)
@@ -38,10 +43,10 @@ pip install -r requirements.txt
 cp .env.example .env      # then fill in your keys
 ```
 
-Set your keys in `.env`:
+In `.env`, pick your providers and set only the keys they need:
 
-- `OPENAI_API_KEY` — for STT + TTS
-- `GEMINI_API_KEY` and (optionally) `GEMINI_BASE_URL` / `GEMINI_MODEL` — your Gemini endpoint
+- `STT_PROVIDER` / `TTS_PROVIDER` / `LLM_PROVIDER`
+- `OPENAI_API_KEY`, `GEMINI_API_KEY`, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY` — whichever the selected providers require (the app tells you if one is missing)
 
 > The Gemini client speaks the OpenAI-compatible chat format. The default
 > `GEMINI_BASE_URL` is Google's compatibility endpoint. If you proxy Gemini
@@ -76,6 +81,38 @@ Everything is environment-driven (see `.env.example`). Highlights:
 | `STT_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model |
 | `TTS_MODEL` / `TTS_VOICE` | `gpt-4o-mini-tts` / `alloy` | OpenAI TTS |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | LLM model name |
+
+## Choosing providers
+
+Set the three provider switches in `.env` and supply only the matching keys:
+
+```bash
+STT_PROVIDER=deepgram      # openai | deepgram | elevenlabs
+TTS_PROVIDER=elevenlabs    # openai | deepgram | elevenlabs
+LLM_PROVIDER=gemini        # gemini | openai
+
+DEEPGRAM_API_KEY=...
+ELEVENLABS_API_KEY=...
+GEMINI_API_KEY=...
+```
+
+All three TTS providers stream **24 kHz / 16-bit mono PCM**, so they drop into
+the same speaker path with no re-encoding. Per-provider model/voice knobs
+(`DEEPGRAM_TTS_MODEL`, `ELEVENLABS_VOICE_ID`, …) are in `.env.example`.
+
+**Recommended for lowest latency:** `STT_PROVIDER=deepgram` (Nova),
+`TTS_PROVIDER=elevenlabs` (Flash v2.5) or `deepgram` (Aura). These are the
+industry-standard fast options and will crush an OpenAI-`tts-1` bottleneck.
+
+## What "fast" means (industry reference)
+
+The benchmark for natural conversation is **~800 ms voice-to-voice** (you stop
+talking → bot audio starts); under 500 ms is excellent. Getting there requires
+*streaming at every stage*. This project streams the **LLM → TTS** path already;
+the remaining serial cost is **batch STT** (the clip is sent after you stop). The
+lowest-latency setups replace that with **streaming STT** (transcribe while you
+talk) or a **speech-to-speech "live" API** (Gemini Live / OpenAI Realtime) — see
+the note at the end.
 
 ## Speeding it up & fixing accuracy
 
@@ -146,12 +183,13 @@ lower latency. If you'd like, this repo can be adapted to Gemini Live.
 ```
 voice_bot/
 ├── __main__.py    # CLI entry point (python -m voice_bot)
-├── config.py      # env-driven settings
+├── config.py      # env-driven settings + provider selection
 ├── audio_io.py    # mic capture + speaker playback (sounddevice), barge-in
+├── audio_utils.py # WAV/PCM helpers shared by providers
 ├── vad.py         # Silero VAD + turn-taking state machine
-├── stt.py         # OpenAI speech-to-text
-├── llm.py         # Gemini LLM (streamed, OpenAI-compatible)
-├── tts.py         # OpenAI text-to-speech (streamed PCM)
+├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
+├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()
+├── tts.py         # TTS providers (OpenAI/Deepgram/ElevenLabs) + create_tts()
 └── pipeline.py    # orchestration: VAD → STT → LLM → sentence-chunked TTS
 ```
 

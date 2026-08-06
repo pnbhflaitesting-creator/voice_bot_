@@ -37,30 +37,61 @@ def _get_bool(name: str, default: bool) -> bool:
 
 @dataclass
 class Settings:
-    # ---- OpenAI (STT + TTS) -------------------------------------------------
+    # ---- Provider selection -------------------------------------------------
+    # Which service handles each stage. Mix and match freely.
+    #   stt_provider: openai | deepgram | elevenlabs
+    #   tts_provider: openai | deepgram | elevenlabs
+    #   llm_provider: gemini | openai
+    stt_provider: str = field(default_factory=lambda: _get("STT_PROVIDER", "openai").lower())
+    tts_provider: str = field(default_factory=lambda: _get("TTS_PROVIDER", "openai").lower())
+    llm_provider: str = field(default_factory=lambda: _get("LLM_PROVIDER", "gemini").lower())
+
+    # ---- API keys -----------------------------------------------------------
     openai_api_key: str = field(default_factory=lambda: _get("OPENAI_API_KEY", ""))
-    # STT model. "gpt-4o-mini-transcribe" is fast + cheap; "whisper-1" is the
-    # most widely compatible fallback.
-    stt_model: str = field(default_factory=lambda: _get("STT_MODEL", "gpt-4o-mini-transcribe"))
+    gemini_api_key: str = field(default_factory=lambda: _get("GEMINI_API_KEY", ""))
+    deepgram_api_key: str = field(default_factory=lambda: _get("DEEPGRAM_API_KEY", ""))
+    elevenlabs_api_key: str = field(default_factory=lambda: _get("ELEVENLABS_API_KEY", ""))
+
+    # ---- STT (shared) -------------------------------------------------------
     # ISO-639-1 language hint (e.g. "en", "sk", "de"). Pinning the language
-    # greatly improves accuracy AND speed on short clips vs. auto-detection.
-    # Leave empty for auto-detect.
+    # improves accuracy AND speed vs. auto-detection. Empty = auto-detect.
     stt_language: str = field(default_factory=lambda: _get("STT_LANGUAGE", ""))
-    # Optional biasing prompt: names/jargon the model should spell correctly.
+    # Optional biasing prompt (OpenAI): names/jargon to spell correctly.
     stt_prompt: str = field(default_factory=lambda: _get("STT_PROMPT", ""))
-    # TTS model + voice. "tts-1" has the lowest time-to-first-audio;
-    # "gpt-4o-mini-tts" sounds better but starts a bit slower.
-    tts_model: str = field(default_factory=lambda: _get("TTS_MODEL", "gpt-4o-mini-tts"))
-    tts_voice: str = field(default_factory=lambda: _get("TTS_VOICE", "alloy"))
+    # Per-provider STT model (only the selected provider's value is used).
+    openai_stt_model: str = field(
+        default_factory=lambda: _get("STT_MODEL", "gpt-4o-mini-transcribe")
+    )
+    deepgram_stt_model: str = field(
+        default_factory=lambda: _get("DEEPGRAM_STT_MODEL", "nova-3")
+    )
+    elevenlabs_stt_model: str = field(
+        default_factory=lambda: _get("ELEVENLABS_STT_MODEL", "scribe_v1")
+    )
+
+    # ---- TTS (shared + per-provider) ----------------------------------------
     tts_speed: float = field(default_factory=lambda: _get_float("TTS_SPEED", 1.0))
+    # OpenAI: "tts-1" is lowest latency; "gpt-4o-mini-tts" sounds nicer.
+    openai_tts_model: str = field(default_factory=lambda: _get("TTS_MODEL", "gpt-4o-mini-tts"))
+    openai_tts_voice: str = field(default_factory=lambda: _get("TTS_VOICE", "alloy"))
+    # Deepgram Aura voice model (voice is baked into the model name).
+    deepgram_tts_model: str = field(
+        default_factory=lambda: _get("DEEPGRAM_TTS_MODEL", "aura-2-thalia-en")
+    )
+    # ElevenLabs: Flash v2.5 is the low-latency model. Default voice = Rachel.
+    elevenlabs_tts_model: str = field(
+        default_factory=lambda: _get("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5")
+    )
+    elevenlabs_voice_id: str = field(
+        default_factory=lambda: _get("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+    )
+
     # Print a per-turn latency breakdown (stt / llm / tts).
     show_timings: bool = field(default_factory=lambda: _get_bool("SHOW_TIMINGS", True))
 
-    # ---- Gemini (LLM) -------------------------------------------------------
-    # The user already has a Gemini endpoint. We talk to it through the OpenAI
-    # wire format, so any OpenAI-compatible Gemini endpoint works. Google's own
-    # compatibility endpoint is the default below.
-    gemini_api_key: str = field(default_factory=lambda: _get("GEMINI_API_KEY", ""))
+    # ---- LLM: Gemini --------------------------------------------------------
+    # Talked to through the OpenAI-compatible wire format, so any compatible
+    # Gemini endpoint works. Google's compatibility endpoint is the default.
     gemini_base_url: str = field(
         default_factory=lambda: _get(
             "GEMINI_BASE_URL",
@@ -70,11 +101,15 @@ class Settings:
     gemini_model: str = field(default_factory=lambda: _get("GEMINI_MODEL", "gemini-2.0-flash"))
     # Gemini 2.5 models "think" before answering by default, adding latency and
     # tokens. For a voice bot we want the fastest first token: "none" disables
-    # thinking. Values: none/low/medium/high, or empty to not send the param
-    # (use empty if your endpoint/proxy rejects it).
+    # thinking. Values: none/low/medium/high, or empty to not send the param.
     gemini_reasoning_effort: str = field(
         default_factory=lambda: _get("GEMINI_REASONING_EFFORT", "none")
     )
+
+    # ---- LLM: OpenAI --------------------------------------------------------
+    openai_llm_model: str = field(default_factory=lambda: _get("OPENAI_LLM_MODEL", "gpt-4o-mini"))
+
+    # ---- LLM (shared) -------------------------------------------------------
     # Cap the reply length so the LLM doesn't ramble (faster, more responsive).
     max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 200))
     system_prompt: str = field(
@@ -124,16 +159,42 @@ class Settings:
         default_factory=lambda: _get_bool("ALLOW_INTERRUPTIONS", True)
     )
 
+    # Which API key each provider needs.
+    _KEY_FOR_PROVIDER = {
+        "openai": ("OPENAI_API_KEY", "openai_api_key"),
+        "gemini": ("GEMINI_API_KEY", "gemini_api_key"),
+        "deepgram": ("DEEPGRAM_API_KEY", "deepgram_api_key"),
+        "elevenlabs": ("ELEVENLABS_API_KEY", "elevenlabs_api_key"),
+    }
+
     def validate(self) -> None:
+        valid = {
+            "stt": {"openai", "deepgram", "elevenlabs"},
+            "tts": {"openai", "deepgram", "elevenlabs"},
+            "llm": {"gemini", "openai"},
+        }
+        for stage, chosen in (
+            ("stt", self.stt_provider),
+            ("tts", self.tts_provider),
+            ("llm", self.llm_provider),
+        ):
+            if chosen not in valid[stage]:
+                raise RuntimeError(
+                    f"{stage.upper()}_PROVIDER='{chosen}' is invalid; "
+                    f"choose one of: {', '.join(sorted(valid[stage]))}."
+                )
+
+        # Only require the keys for the providers actually selected.
+        needed = {self.stt_provider, self.tts_provider, self.llm_provider}
         missing = []
-        if not self.openai_api_key:
-            missing.append("OPENAI_API_KEY")
-        if not self.gemini_api_key:
-            missing.append("GEMINI_API_KEY")
+        for provider in needed:
+            env_name, attr = self._KEY_FOR_PROVIDER[provider]
+            if not getattr(self, attr):
+                missing.append(env_name)
         if missing:
             raise RuntimeError(
-                "Missing required environment variables: "
-                + ", ".join(missing)
+                "Missing required environment variables for the selected "
+                "providers: " + ", ".join(sorted(set(missing)))
                 + ". Copy .env.example to .env and fill them in."
             )
 

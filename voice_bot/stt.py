@@ -1,45 +1,136 @@
-"""Speech-to-text using OpenAI's transcription models."""
+"""Speech-to-text providers: OpenAI, Deepgram, ElevenLabs.
+
+Each provider takes a float32 mono @ 16 kHz utterance and returns a transcript.
+Select one with ``STT_PROVIDER`` (see config). ``create_stt()`` builds it.
+
+Note: these are batch (whole-utterance) transcribers — the clip is sent after
+the turn ends. For the lowest possible STT latency you'd want *streaming* STT
+(Deepgram's WebSocket), which transcribes while the user is still talking.
+"""
 
 from __future__ import annotations
 
-import io
-import wave
+from typing import Protocol
 
+import httpx
 import numpy as np
 from openai import AsyncOpenAI
 
+from .audio_utils import to_wav_bytes
 from .config import settings
 
 
-def _to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    """Encode float32 mono audio in [-1, 1] as a 16-bit PCM WAV file."""
-    pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2")
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        wav.writeframes(pcm16.tobytes())
-    return buf.getvalue()
+class STTProvider(Protocol):
+    async def transcribe(self, audio: np.ndarray) -> str: ...
+    async def warmup(self) -> None: ...
+    async def aclose(self) -> None: ...
 
 
-class SpeechToText:
-    def __init__(self, client: AsyncOpenAI) -> None:
-        self._client = client
+class OpenAISTT:
+    def __init__(self) -> None:
+        self._client = AsyncOpenAI(api_key=settings.openai_api_key)
 
     async def transcribe(self, audio: np.ndarray) -> str:
-        """Return the transcript of a float32 mono @ 16 kHz utterance."""
-        wav_bytes = _to_wav_bytes(audio, settings.input_sample_rate)
-        # The SDK accepts a (filename, bytes, mimetype) tuple as the file.
+        wav_bytes = to_wav_bytes(audio, settings.input_sample_rate)
         kwargs: dict = {
-            "model": settings.stt_model,
+            "model": settings.openai_stt_model,
             "file": ("speech.wav", wav_bytes, "audio/wav"),
         }
-        # Pinning the language avoids wrong auto-detection on short clips
-        # (big accuracy + latency win); the prompt biases spelling of names.
         if settings.stt_language:
             kwargs["language"] = settings.stt_language
         if settings.stt_prompt:
             kwargs["prompt"] = settings.stt_prompt
         resp = await self._client.audio.transcriptions.create(**kwargs)
         return (resp.text or "").strip()
+
+    async def warmup(self) -> None:
+        try:
+            await self._client.models.list()
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        await self._client.close()
+
+
+class DeepgramSTT:
+    """Deepgram prerecorded transcription (REST)."""
+
+    _URL = "https://api.deepgram.com/v1/listen"
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(
+            headers={"Authorization": f"Token {settings.deepgram_api_key}"},
+            timeout=30.0,
+        )
+
+    async def transcribe(self, audio: np.ndarray) -> str:
+        wav_bytes = to_wav_bytes(audio, settings.input_sample_rate)
+        params = {"model": settings.deepgram_stt_model, "smart_format": "true"}
+        if settings.stt_language:
+            params["language"] = settings.stt_language
+        resp = await self._client.post(
+            self._URL,
+            params=params,
+            content=wav_bytes,
+            headers={"Content-Type": "audio/wav"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return (
+            data["results"]["channels"][0]["alternatives"][0]["transcript"]
+        ).strip()
+
+    async def warmup(self) -> None:
+        try:
+            await self._client.get("https://api.deepgram.com/v1/auth/token")
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+class ElevenLabsSTT:
+    """ElevenLabs Scribe speech-to-text (REST)."""
+
+    _URL = "https://api.elevenlabs.io/v1/speech-to-text"
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(
+            headers={"xi-api-key": settings.elevenlabs_api_key},
+            timeout=30.0,
+        )
+
+    async def transcribe(self, audio: np.ndarray) -> str:
+        wav_bytes = to_wav_bytes(audio, settings.input_sample_rate)
+        data = {"model_id": settings.elevenlabs_stt_model}
+        if settings.stt_language:
+            data["language_code"] = settings.stt_language
+        resp = await self._client.post(
+            self._URL,
+            data=data,
+            files={"file": ("speech.wav", wav_bytes, "audio/wav")},
+        )
+        resp.raise_for_status()
+        return (resp.json().get("text") or "").strip()
+
+    async def warmup(self) -> None:
+        try:
+            await self._client.get("https://api.elevenlabs.io/v1/models")
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+def create_stt() -> STTProvider:
+    provider = settings.stt_provider
+    if provider == "openai":
+        return OpenAISTT()
+    if provider == "deepgram":
+        return DeepgramSTT()
+    if provider == "elevenlabs":
+        return ElevenLabsSTT()
+    raise ValueError(f"Unknown STT provider: {provider}")
