@@ -69,6 +69,10 @@ _END = object()
 class SpeakerStream:
     """Plays 24 kHz int16 PCM chunks; supports immediate interruption."""
 
+    # Write audio in small sub-chunks so an interrupt takes effect within a
+    # few tens of milliseconds (~20 ms at 24 kHz mono = 480 samples).
+    _SUBCHUNK = 480
+
     def __init__(self) -> None:
         self._queue: queue.Queue = queue.Queue()
         self._stream = sd.OutputStream(
@@ -76,7 +80,11 @@ class SpeakerStream:
             channels=1,
             dtype="int16",
             device=settings.output_device,
+            latency="low",  # keep the device buffer small for snappy stops
         )
+        # Guards every PortAudio call on the output stream so stream control
+        # (stop/close) never races with the worker's write().
+        self._stream_lock = threading.Lock()
         self._interrupt = threading.Event()
         self._playing = threading.Event()  # set while audio is actually going out
         self._done_event: threading.Event | None = None
@@ -90,10 +98,12 @@ class SpeakerStream:
 
     def close(self) -> None:
         self._running = False
+        self._interrupt.set()  # stop the worker writing any more audio
         self._queue.put(_END)
         self._thread.join(timeout=2)
-        self._stream.stop()
-        self._stream.close()
+        with self._stream_lock:
+            self._stream.stop()
+            self._stream.close()
 
     # -- producing audio ---------------------------------------------------
     def play(self, pcm: bytes) -> None:
@@ -111,7 +121,14 @@ class SpeakerStream:
 
     # -- interruption ------------------------------------------------------
     def interrupt(self) -> None:
-        """Stop and discard everything currently queued/playing (barge-in)."""
+        """Stop and discard everything currently queued/playing (barge-in).
+
+        We set a flag rather than abort()/start() the PortAudio stream: aborting
+        from this thread while the worker is mid-write races inside ALSA and
+        throws ``PaErrorCode -9999``. The worker checks the flag between small
+        sub-chunks, so playback halts within ~20 ms without touching the stream
+        from two threads at once.
+        """
         self._interrupt.set()
         # Drain anything pending.
         try:
@@ -119,9 +136,6 @@ class SpeakerStream:
                 self._queue.get_nowait()
         except queue.Empty:
             pass
-        # Drop audio already buffered in PortAudio for an instant stop.
-        self._stream.abort()
-        self._stream.start()
         self._playing.clear()
         if self._done_event is not None:
             self._done_event.set()
@@ -146,7 +160,17 @@ class SpeakerStream:
                 continue  # dropped due to barge-in
             self._playing.set()
             samples = np.frombuffer(item, dtype=np.int16)
-            try:
-                self._stream.write(samples)
-            except Exception as exc:  # pragma: no cover - device hiccups
-                print(f"[audio-out] {exc}", flush=True)
+            # Write in small sub-chunks, checking for interruption between each
+            # so a barge-in stops playback almost immediately.
+            for start in range(0, len(samples), self._SUBCHUNK):
+                if self._interrupt.is_set() or not self._running:
+                    break
+                sub = samples[start:start + self._SUBCHUNK]
+                try:
+                    with self._stream_lock:
+                        if not self._running:
+                            break
+                        self._stream.write(sub)
+                except Exception as exc:  # pragma: no cover - device hiccups
+                    print(f"[audio-out] {exc}", flush=True)
+                    break

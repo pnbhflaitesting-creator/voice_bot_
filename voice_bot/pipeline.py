@@ -88,6 +88,15 @@ class VoiceBot:
     async def _listen_loop(self) -> None:
         while True:
             frame = await self._frame_queue.get()
+
+            # Half-duplex mode (no barge-in): while the bot is speaking, ignore
+            # the microphone entirely. Without echo cancellation the mic hears
+            # the bot's own voice from the speakers; feeding that to the VAD/STT
+            # makes the bot transcribe and answer itself. Dropping frames here
+            # (and resetting the VAD when the bot finishes) prevents that loop.
+            if self._bot_speaking and not settings.allow_interruptions:
+                continue
+
             result = self._vad.process(frame)
 
             if result.event is TurnEvent.SPEECH_START and self._bot_speaking:
@@ -97,9 +106,7 @@ class VoiceBot:
 
             elif result.event is TurnEvent.TURN_END and result.audio is not None:
                 if self._bot_speaking:
-                    # Turn finished while bot audio was still (nominally) playing.
-                    if not settings.allow_interruptions:
-                        continue
+                    # Turn finished while bot audio was still playing -> barge-in.
                     await self._interrupt()
                 # Mark busy immediately so a follow-up turn can't spawn a second
                 # overlapping response during STT (before audio starts playing).
@@ -130,6 +137,12 @@ class VoiceBot:
         except Exception as exc:  # pragma: no cover - surface API/network errors
             print(f"\n[error] {exc}", flush=True)
         finally:
+            if not settings.allow_interruptions:
+                # Discard mic frames captured during playback (they contain the
+                # bot's own audio) and clear VAD state before we start listening.
+                while not self._frame_queue.empty():
+                    self._frame_queue.get_nowait()
+                self._vad.reset()
             self._bot_speaking = False
 
     async def _interrupt(self) -> None:
