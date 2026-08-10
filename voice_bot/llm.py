@@ -38,11 +38,11 @@ class OpenAICompatLLM:
         self._model = model
         self._extra_body = extra_body or None
         self._history: list[dict[str, str]] = [
-            {"role": "system", "content": settings.system_prompt}
+            {"role": "system", "content": settings.effective_system_prompt}
         ]
 
     def reset(self) -> None:
-        self._history = [{"role": "system", "content": settings.system_prompt}]
+        self._history = [{"role": "system", "content": settings.effective_system_prompt}]
 
     def _kwargs(self, messages: list[dict[str, str]], **overrides) -> dict:
         kwargs: dict = {

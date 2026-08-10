@@ -120,6 +120,16 @@ class Settings:
             "long numbers unless asked.",
         )
     )
+    # Force the assistant to always reply in this language regardless of what
+    # language the user speaks (e.g. "English", "Turkish"). Empty = match input.
+    response_language: str = field(default_factory=lambda: _get("RESPONSE_LANGUAGE", ""))
+
+    @property
+    def effective_system_prompt(self) -> str:
+        prompt = self.system_prompt
+        if self.response_language:
+            prompt += f" Always respond in {self.response_language}, no matter what language the user speaks."
+        return prompt
 
     # ---- Audio --------------------------------------------------------------
     # Silero VAD requires 16 kHz mono. Do not change the input rate.

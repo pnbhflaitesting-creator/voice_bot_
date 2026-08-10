@@ -92,9 +92,12 @@ class VoiceBot:
         self._vad = TurnDetector()
         self._denoiser = Denoiser()
 
+        stt_lang = settings.stt_language or "auto"
+        reply_lang = settings.response_language or "match input"
         print(
-            f"🔌 STT={settings.stt_provider} · TTS={settings.tts_provider} · "
-            f"LLM={settings.llm_provider}",
+            f"🔌 STT={settings.stt_provider} (lang={stt_lang}) · "
+            f"TTS={settings.tts_provider} · "
+            f"LLM={settings.llm_provider} (reply={reply_lang})",
             flush=True,
         )
         if self._denoiser.enabled:

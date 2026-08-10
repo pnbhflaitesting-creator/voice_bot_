@@ -160,9 +160,23 @@ Use it to see *where* the time goes, then tune:
 language auto-detection guessing wrong on a short clip. **Pin your language:**
 
 ```bash
-STT_LANGUAGE=en          # or sk, de, es, fr, ...
+STT_LANGUAGE=en          # the language you SPEAK — or tr, de, es, fr, ...
 # STT_PROMPT=names, jargon, product terms it keeps misspelling
 ```
+
+> ⚠️ **`STT_LANGUAGE` is not translation** — it tells STT which language you're
+> *speaking*. And OpenAI's `gpt-4o(-mini)-transcribe` is
+> [known to ignore it](https://community.openai.com/t/gpt-4o-transcribe-language-enforcement/1357014)
+> and transcribe the wrong language anyway. If you need the language *enforced*,
+> use a provider that respects it:
+> ```bash
+> STT_PROVIDER=deepgram   # strict language + fast (recommended)
+> STT_LANGUAGE=en
+> DEEPGRAM_API_KEY=...
+> # or, staying on OpenAI:  STT_MODEL=whisper-1   (strict but slower)
+> ```
+> To always **reply** in one language no matter what's spoken, set
+> `RESPONSE_LANGUAGE=English` (this steers the LLM, independent of STT).
 
 **Latency levers, biggest first:**
 
