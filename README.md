@@ -142,6 +142,18 @@ Denoising runs on the buffered utterance (off the real-time mic path, in a
 worker thread) so it adds a little processing but not streaming latency. If the
 libraries aren't installed it prints a note and simply runs without denoising.
 
+**Hear what the model hears.** To debug transcription, dump every turn to disk:
+
+```bash
+SAVE_TURNS=true
+TURNS_DIR=recordings
+```
+
+Each turn writes `<time>_<n>_raw.wav` (mic input), `<time>_<n>_clean.wav` (what
+STT actually received, after denoising), and `<time>_<n>.txt` (the transcript).
+Play the two WAVs back-to-back to check whether denoising is helping or muffling
+your speech — and compare against the transcript.
+
 > For heavier, real-time per-frame suppression the industry uses **RNNoise**,
 > **DeepFilterNet**, or **Krisp**; and hardware/OS echo-and-noise cancellation
 > (or a headset mic) beats any of this. Ask if you want DeepFilterNet wired in.
@@ -233,6 +245,7 @@ voice_bot/
 ├── audio_io.py    # mic capture + speaker playback (sounddevice), barge-in
 ├── audio_utils.py # WAV/PCM helpers shared by providers
 ├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
+├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
 ├── vad.py         # Silero VAD + turn-taking state machine
 ├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
 ├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()

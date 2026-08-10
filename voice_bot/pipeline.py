@@ -22,6 +22,7 @@ from .audio_io import MicrophoneStream, SpeakerStream
 from .config import settings
 from .denoise import Denoiser
 from .llm import create_llm
+from .recorder import TurnRecorder
 from .stt import create_stt
 from .tts import create_tts
 from .vad import TurnDetector, TurnEvent
@@ -91,6 +92,7 @@ class VoiceBot:
         self._llm = create_llm()
         self._vad = TurnDetector()
         self._denoiser = Denoiser()
+        self._recorder = TurnRecorder()
 
         stt_lang = settings.stt_language or "auto"
         reply_lang = settings.response_language or "match input"
@@ -107,6 +109,8 @@ class VoiceBot:
             if settings.denoise == "spectral":
                 bits.append(f"spectral {settings.denoise_strength}")
             print(f"🧹 Noise suppression: {', '.join(bits)}", flush=True)
+        if self._recorder.enabled:
+            print(f"💾 Saving each turn (raw+clean audio & transcript) to {settings.turns_dir}/", flush=True)
 
         self._speaker = SpeakerStream()
         self._frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=200)
@@ -171,9 +175,20 @@ class VoiceBot:
     async def _handle_turn(self, audio: np.ndarray) -> None:
         t0 = time.perf_counter()
         try:
+            raw_audio = audio  # what the mic heard, before denoising
             if self._denoiser.enabled:
                 audio = await asyncio.to_thread(self._denoiser.process, audio)
             transcript = await self._stt.transcribe(audio)
+
+            # Save raw + denoised audio and the transcript for inspection. Done
+            # even when the transcript is empty — that's when you most want to
+            # hear what the model was given.
+            if self._recorder.enabled:
+                stem = await asyncio.to_thread(
+                    self._recorder.save, raw_audio, audio, transcript
+                )
+                print(f"💾 saved {settings.turns_dir}/{stem}_[raw|clean].wav + .txt", flush=True)
+
             if not transcript:
                 return
             t_stt = time.perf_counter()

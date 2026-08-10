@@ -186,6 +186,13 @@ class Settings:
     # ~80-100 Hz is safe for speech. Uses scipy if available.
     highpass_hz: int = field(default_factory=lambda: _get_int("HIGHPASS_HZ", 0))
 
+    # ---- Debug recording ----------------------------------------------------
+    # Save, for each detected turn, the raw audio (what the mic heard), the
+    # denoised audio (what is sent to STT), and the transcript. Lets you listen
+    # to both and compare against what the model returned.
+    save_turns: bool = field(default_factory=lambda: _get_bool("SAVE_TURNS", False))
+    turns_dir: str = field(default_factory=lambda: _get("TURNS_DIR", "recordings"))
+
     # Which API key each provider needs.
     _KEY_FOR_PROVIDER = {
         "openai": ("OPENAI_API_KEY", "openai_api_key"),
