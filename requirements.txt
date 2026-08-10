@@ -6,3 +6,7 @@ torch>=2.2                # backend for Silero VAD
 sounddevice>=0.4.6        # real-time microphone + speaker I/O (PortAudio)
 numpy>=1.24
 python-dotenv>=1.0
+
+# Optional: noise suppression (only needed if DENOISE=spectral or HIGHPASS_HZ>0)
+# noisereduce>=3.0
+# scipy>=1.10

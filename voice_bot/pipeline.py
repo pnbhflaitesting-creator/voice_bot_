@@ -20,6 +20,7 @@ import numpy as np
 
 from .audio_io import MicrophoneStream, SpeakerStream
 from .config import settings
+from .denoise import Denoiser
 from .llm import create_llm
 from .stt import create_stt
 from .tts import create_tts
@@ -89,12 +90,20 @@ class VoiceBot:
         self._tts = create_tts()
         self._llm = create_llm()
         self._vad = TurnDetector()
+        self._denoiser = Denoiser()
 
         print(
             f"🔌 STT={settings.stt_provider} · TTS={settings.tts_provider} · "
             f"LLM={settings.llm_provider}",
             flush=True,
         )
+        if self._denoiser.enabled:
+            bits = []
+            if settings.highpass_hz > 0:
+                bits.append(f"high-pass {settings.highpass_hz}Hz")
+            if settings.denoise == "spectral":
+                bits.append(f"spectral {settings.denoise_strength}")
+            print(f"🧹 Noise suppression: {', '.join(bits)}", flush=True)
 
         self._speaker = SpeakerStream()
         self._frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=200)
@@ -159,6 +168,8 @@ class VoiceBot:
     async def _handle_turn(self, audio: np.ndarray) -> None:
         t0 = time.perf_counter()
         try:
+            if self._denoiser.enabled:
+                audio = await asyncio.to_thread(self._denoiser.process, audio)
             transcript = await self._stt.transcribe(audio)
             if not transcript:
                 return

@@ -159,6 +159,23 @@ class Settings:
         default_factory=lambda: _get_bool("ALLOW_INTERRUPTIONS", True)
     )
 
+    # ---- Noise suppression (applied to the utterance before STT) ------------
+    # "none"     : off (default).
+    # "spectral" : spectral-gating denoise via the `noisereduce` package
+    #              (pip install noisereduce). Good for steady background noise.
+    denoise: str = field(default_factory=lambda: _get("DENOISE", "none").lower())
+    # How aggressively to reduce noise (0..1). Higher removes more noise but can
+    # muffle speech.
+    denoise_strength: float = field(default_factory=lambda: _get_float("DENOISE_STRENGTH", 0.8))
+    # Stationary = assume a constant noise profile (fan/hum); non-stationary
+    # adapts over time (recommended for varied noise).
+    denoise_stationary: bool = field(
+        default_factory=lambda: _get_bool("DENOISE_STATIONARY", False)
+    )
+    # High-pass filter cutoff in Hz to cut low-frequency rumble/hum (0 = off).
+    # ~80-100 Hz is safe for speech. Uses scipy if available.
+    highpass_hz: int = field(default_factory=lambda: _get_int("HIGHPASS_HZ", 0))
+
     # Which API key each provider needs.
     _KEY_FOR_PROVIDER = {
         "openai": ("OPENAI_API_KEY", "openai_api_key"),

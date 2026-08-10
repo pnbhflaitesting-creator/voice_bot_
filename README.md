@@ -114,6 +114,38 @@ lowest-latency setups replace that with **streaming STT** (transcribe while you
 talk) or a **speech-to-speech "live" API** (Gemini Live / OpenAI Realtime) — see
 the note at the end.
 
+## Suppressing background noise
+
+There are **two different noise problems** — pick the fix for yours:
+
+**A. Noise *triggers* the bot** (it replies to a fan, keyboard, or other people
+talking). This is turn-detection, not audio quality. Tighten the VAD — no extra
+dependencies:
+
+```bash
+VAD_THRESHOLD=0.7      # 0..1, higher = only confident speech counts
+MIN_SPEECH_MS=300      # require longer continuous speech to start a turn
+```
+
+**B. Noise *garbles* what you say** (STT mishears you in a noisy room). Enable
+denoising of the utterance before it's transcribed:
+
+```bash
+pip install noisereduce scipy
+
+DENOISE=spectral       # spectral-gating denoise
+DENOISE_STRENGTH=0.8   # 0..1 (higher = more aggressive)
+HIGHPASS_HZ=90         # also cut low rumble/hum (optional)
+```
+
+Denoising runs on the buffered utterance (off the real-time mic path, in a
+worker thread) so it adds a little processing but not streaming latency. If the
+libraries aren't installed it prints a note and simply runs without denoising.
+
+> For heavier, real-time per-frame suppression the industry uses **RNNoise**,
+> **DeepFilterNet**, or **Krisp**; and hardware/OS echo-and-noise cancellation
+> (or a headset mic) beats any of this. Ask if you want DeepFilterNet wired in.
+
 ## Speeding it up & fixing accuracy
 
 Every turn prints a latency breakdown (`SHOW_TIMINGS=true`):
@@ -186,6 +218,7 @@ voice_bot/
 ├── config.py      # env-driven settings + provider selection
 ├── audio_io.py    # mic capture + speaker playback (sounddevice), barge-in
 ├── audio_utils.py # WAV/PCM helpers shared by providers
+├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
 ├── vad.py         # Silero VAD + turn-taking state machine
 ├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
 ├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()
