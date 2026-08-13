@@ -128,6 +128,7 @@ class VoiceBot:
         self._response_task: asyncio.Task | None = None
         self._bot_speaking = False
         self._turn_no = 0
+        self._stt_streaming = getattr(self._stt, "streaming", False)
 
         log.info(
             "config: stt=%s tts=%s llm=%s model=%s lang=%s reply_lang=%s "
@@ -174,6 +175,11 @@ class VoiceBot:
             # (and resetting the VAD when the bot finishes) prevents that loop.
             if self._bot_speaking and not settings.allow_interruptions:
                 continue
+
+            # Streaming STT: push each live frame so transcription happens while
+            # the user is still talking (near-zero latency at turn end).
+            if self._stt_streaming:
+                await self._stt.feed(frame)
 
             result = self._vad.process(frame)
 

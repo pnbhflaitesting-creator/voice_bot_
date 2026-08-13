@@ -1,6 +1,7 @@
 # Core
 openai>=1.51.0            # OpenAI STT/TTS + OpenAI-compatible LLM (incl. Gemini)
 httpx>=0.27              # REST calls to Deepgram / ElevenLabs
+websockets>=12.0         # Deepgram streaming STT (STT_PROVIDER=deepgram-stream)
 silero-vad>=5.1.2         # Voice Activity Detection
 torch>=2.2                # backend for Silero VAD
 sounddevice>=0.4.6        # real-time microphone + speaker I/O (PortAudio)

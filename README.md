@@ -6,7 +6,7 @@ each stage:
 | Stage | Providers (pick one via `.env`) |
 | --- | --- |
 | 🎧 **VAD / turn-taking** | Silero VAD |
-| 📝 **STT** | `openai` · `deepgram` · `elevenlabs` |
+| 📝 **STT** | `openai` · `deepgram` · `deepgram-stream` (real-time) · `elevenlabs` |
 | 🧠 **LLM** | `gemini` · `openai` |
 | 🔊 **TTS** | `openai` · `deepgram` · `elevenlabs` |
 
@@ -127,9 +127,19 @@ All three TTS providers stream **24 kHz / 16-bit mono PCM**, so they drop into
 the same speaker path with no re-encoding. Per-provider model/voice knobs
 (`DEEPGRAM_TTS_MODEL`, `ELEVENLABS_VOICE_ID`, …) are in `.env.example`.
 
-**Recommended for lowest latency:** `STT_PROVIDER=deepgram` (Nova),
+**Recommended for lowest latency:** `STT_PROVIDER=deepgram-stream` (real-time),
 `TTS_PROVIDER=elevenlabs` (Flash v2.5) or `deepgram` (Aura). These are the
 industry-standard fast options and will crush an OpenAI-`tts-1` bottleneck.
+
+### Streaming STT (`deepgram-stream`)
+
+The batch STT providers can't start until you *stop* talking, then upload the
+whole clip — so a 3-second sentence costs ~1–2s of pure post-speech STT.
+`deepgram-stream` instead streams your audio to Deepgram over a WebSocket
+**while you speak**, so at end-of-turn it just sends a Finalize and returns the
+last words (~100–300ms). Turn-taking is still driven by Silero VAD; Deepgram
+only transcribes. If the socket can't connect it transparently falls back to the
+batch REST API, so it never hard-fails. Needs `pip install websockets`.
 
 ## What "fast" means (industry reference)
 

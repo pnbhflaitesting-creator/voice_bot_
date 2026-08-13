@@ -219,12 +219,13 @@ class Settings:
         "openai": ("OPENAI_API_KEY", "openai_api_key"),
         "gemini": ("GEMINI_API_KEY", "gemini_api_key"),
         "deepgram": ("DEEPGRAM_API_KEY", "deepgram_api_key"),
+        "deepgram-stream": ("DEEPGRAM_API_KEY", "deepgram_api_key"),
         "elevenlabs": ("ELEVENLABS_API_KEY", "elevenlabs_api_key"),
     }
 
     def validate(self) -> None:
         valid = {
-            "stt": {"openai", "deepgram", "elevenlabs"},
+            "stt": {"openai", "deepgram", "deepgram-stream", "elevenlabs"},
             "tts": {"openai", "deepgram", "elevenlabs"},
             "llm": {"gemini", "openai"},
         }
