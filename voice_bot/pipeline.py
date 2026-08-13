@@ -201,17 +201,21 @@ class VoiceBot:
         log.info("turn %d: start, clip=%.2fs (%d samples)", turn, clip_s, len(audio))
         try:
             raw_audio = audio  # what the mic heard, before denoising
+            denoise_ms = 0.0
             if self._denoiser.enabled:
                 t = time.perf_counter()
                 audio = await asyncio.to_thread(self._denoiser.process, audio)
-                log.debug("turn %d: denoise done in %.0fms", turn, (time.perf_counter() - t) * 1000)
+                denoise_ms = (time.perf_counter() - t) * 1000
+                log.info("turn %d: denoise done in %.0fms", turn, denoise_ms)
 
             log.info("turn %d: STT (%s) …", turn, settings.stt_provider)
+            t_stt_start = time.perf_counter()
             transcript = await self._stt.transcribe(audio)
             t_stt = time.perf_counter()
+            stt_ms = (t_stt - t_stt_start) * 1000
             log.info(
-                "turn %d: STT done in %.0fms -> %r",
-                turn, (t_stt - t0) * 1000, transcript,
+                "turn %d: STT done in %.0fms (denoise %.0fms) -> %r",
+                turn, stt_ms, denoise_ms, transcript,
             )
 
             # Save raw + denoised audio and the transcript for inspection. Done
@@ -259,18 +263,19 @@ class VoiceBot:
             log.info("turn %d: reply -> %r", turn, reply)
 
             if t_first_audio is not None:
-                stt_ms = (t_stt - t0) * 1000
+                # llm here also covers any tool calls (see per-tool log lines).
                 llm_ms = ((t_first_token or t_stt) - t_stt) * 1000
                 tts_ms = (t_first_audio - (t_first_token or t_stt)) * 1000
                 ttfa_ms = (t_first_audio - t0) * 1000
                 log.info(
-                    "turn %d: timings clip=%.1fs stt=%.0fms llm=%.0fms tts=%.0fms "
-                    "to-first-audio=%.0fms",
-                    turn, clip_s, stt_ms, llm_ms, tts_ms, ttfa_ms,
+                    "turn %d: timings clip=%.1fs denoise=%.0fms stt=%.0fms llm=%.0fms "
+                    "tts=%.0fms to-first-audio=%.0fms",
+                    turn, clip_s, denoise_ms, stt_ms, llm_ms, tts_ms, ttfa_ms,
                 )
                 if settings.show_timings:
+                    dn = f"denoise {denoise_ms:.0f}ms · " if denoise_ms else ""
                     print(
-                        f"⏱  clip {clip_s:.1f}s · stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
+                        f"⏱  clip {clip_s:.1f}s · {dn}stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
                         f"tts {tts_ms:.0f}ms · to-first-audio {ttfa_ms:.0f}ms",
                         flush=True,
                     )

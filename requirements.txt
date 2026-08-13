@@ -7,6 +7,9 @@ sounddevice>=0.4.6        # real-time microphone + speaker I/O (PortAudio)
 numpy>=1.24
 python-dotenv>=1.0
 
-# Noise suppression (used by the default .env: DENOISE=spectral, HIGHPASS_HZ=90)
+# Real web search for the agent's web_search tool (DuckDuckGo SERP)
+ddgs>=6.0
+
+# Noise suppression (only needed if you enable DENOISE=spectral / HIGHPASS_HZ>0)
 noisereduce>=3.0
 scipy>=1.10

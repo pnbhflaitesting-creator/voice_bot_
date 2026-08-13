@@ -94,7 +94,7 @@ by default (`AGENT_ENABLED=true`). All demo tools are keyless:
 | `get_weather(location)` | Real weather via Open-Meteo. **Asks for the city if you don't say one.** |
 | `get_current_time(timezone)` | Local or named-timezone clock |
 | `calculate(expression)` | Safe arithmetic (`2*(3+4)`, `sqrt(144)`) |
-| `web_search(query)` | Quick factual answers (DuckDuckGo) |
+| `web_search(query)` | Real web search (DuckDuckGo SERP via the `ddgs` package) |
 | `remember` / `recall` / `list_memories` | Store & retrieve facts for the session |
 
 Try saying:

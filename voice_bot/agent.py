@@ -18,6 +18,7 @@ program exits.
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import json
 import logging
@@ -31,6 +32,21 @@ from datetime import datetime
 import httpx
 
 log = logging.getLogger(__name__)
+
+
+def _ddg_search(query: str, max_results: int = 5) -> list[dict]:
+    """Real DuckDuckGo web search (synchronous). Raises if the library is absent.
+
+    Supports both the current ``ddgs`` package and the older
+    ``duckduckgo_search`` name.
+    """
+    try:
+        from ddgs import DDGS  # current package name
+    except ImportError:  # pragma: no cover - fallback to the old name
+        from duckduckgo_search import DDGS
+
+    with DDGS() as ddgs:
+        return list(ddgs.text(query, max_results=max_results))
 
 # ---------------------------------------------------------------------------
 # Session memory
@@ -311,6 +327,24 @@ class Agent:
         return f"{expression} = {value}"
 
     async def _web_search(self, query: str) -> str:
+        # Real web search via DuckDuckGo SERP (the `ddgs` package), which returns
+        # actual result pages — unlike the Instant Answer API, which only covers
+        # entities/definitions. Runs in a thread since the library is sync.
+        try:
+            results = await asyncio.to_thread(_ddg_search, query, 5)
+        except Exception as exc:
+            log.warning("web_search via ddgs failed: %s", exc)
+            results = None
+
+        if results:
+            lines = [f"Top web results for '{query}':"]
+            for i, r in enumerate(results, 1):
+                title = (r.get("title") or "").strip()
+                body = (r.get("body") or "").strip()
+                lines.append(f"{i}. {title} — {body}")
+            return "\n".join(lines)
+
+        # Fallback: DuckDuckGo Instant Answer (works for definitions/entities).
         resp = await self._http.get(
             "https://api.duckduckgo.com/",
             params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
@@ -324,7 +358,10 @@ class Agent:
         for topic in data.get("RelatedTopics", []):
             if isinstance(topic, dict) and topic.get("Text"):
                 return topic["Text"]
-        return f"I couldn't find a quick answer for '{query}'."
+        return (
+            f"I couldn't find results for '{query}'. "
+            "(Install the 'ddgs' package for full web search.)"
+        )
 
     async def _remember(self, key: str, value: str) -> str:
         self.memory.set(key, value)
