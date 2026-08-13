@@ -18,6 +18,7 @@ from collections.abc import AsyncIterator
 
 import numpy as np
 
+from .agent import Agent
 from .audio_io import MicrophoneStream, SpeakerStream
 from .config import settings
 from .denoise import Denoiser
@@ -87,9 +88,10 @@ async def _sentence_chunks(tokens: AsyncIterator[str]) -> AsyncIterator[str]:
 class VoiceBot:
     def __init__(self) -> None:
         # Providers are chosen by env (STT_PROVIDER / TTS_PROVIDER / LLM_PROVIDER).
+        self._agent = Agent() if settings.agent_enabled else None
         self._stt = create_stt()
         self._tts = create_tts()
-        self._llm = create_llm()
+        self._llm = create_llm(agent=self._agent)
         self._vad = TurnDetector()
         self._denoiser = Denoiser()
         self._recorder = TurnRecorder()
@@ -111,6 +113,8 @@ class VoiceBot:
             print(f"🧹 Noise suppression: {', '.join(bits)}", flush=True)
         if self._recorder.enabled:
             print(f"💾 Saving each turn (raw+clean audio & transcript) to {settings.turns_dir}/", flush=True)
+        if self._agent is not None:
+            print(f"🤝 Agent tools: {', '.join(self._agent.tool_names)}", flush=True)
 
         self._speaker = SpeakerStream()
         self._frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=200)
@@ -259,7 +263,10 @@ class VoiceBot:
         if self._mic:
             self._mic.stop()
         self._speaker.close()
-        for provider in (self._stt, self._tts, self._llm):
+        closeables = [self._stt, self._tts, self._llm]
+        if self._agent is not None:
+            closeables.append(self._agent)
+        for provider in closeables:
             try:
                 await provider.aclose()
             except Exception:

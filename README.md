@@ -11,7 +11,8 @@ each stage:
 | 🔊 **TTS** | `openai` · `deepgram` · `elevenlabs` |
 
 Token-streaming + sentence-chunked TTS for low latency, plus **barge-in**
-(interrupt the bot by speaking).
+(interrupt the bot by speaking) and an **agent layer** — the LLM can call tools
+(weather, time, math, web search) and keeps a **session memory**.
 
 ```
 🎙️ mic ─▶ Silero VAD (turn detection) ─▶ OpenAI STT ─▶ Gemini LLM (streamed)
@@ -81,6 +82,32 @@ Everything is environment-driven (see `.env.example`). Highlights:
 | `STT_MODEL` | `gpt-4o-mini-transcribe` | OpenAI transcription model |
 | `TTS_MODEL` / `TTS_VOICE` | `gpt-4o-mini-tts` / `alloy` | OpenAI TTS |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | LLM model name |
+
+## Agent tools & memory
+
+The bot is an **agent**: the LLM can call tools (native function-calling — no
+MCP needed) and keeps a **session memory** that lasts until you Ctrl+C. Enabled
+by default (`AGENT_ENABLED=true`). All demo tools are keyless:
+
+| Tool | What it does |
+| --- | --- |
+| `get_weather(location)` | Real weather via Open-Meteo. **Asks for the city if you don't say one.** |
+| `get_current_time(timezone)` | Local or named-timezone clock |
+| `calculate(expression)` | Safe arithmetic (`2*(3+4)`, `sqrt(144)`) |
+| `web_search(query)` | Quick factual answers (DuckDuckGo) |
+| `remember` / `recall` / `list_memories` | Store & retrieve facts for the session |
+
+Try saying:
+
+- *"What's the weather?"* → it asks **which city**, then answers with real data.
+- *"Remember that my favourite colour is teal."* … later … *"What's my favourite colour?"*
+- *"What's the square root of 2025?"* · *"What time is it in Tokyo?"*
+
+When a tool runs you'll see it in the console, e.g. `🛠️  get_weather(location='Tokyo')`.
+The model streams a normal spoken answer when no tool is needed, so latency for
+plain chat is unchanged. Add your own tool in `voice_bot/agent.py` by appending
+a `Tool(...)` to `_build_tools` — its JSON schema is sent to the model
+automatically. Set `AGENT_ENABLED=false` to disable tools entirely.
 
 ## Choosing providers
 
@@ -246,6 +273,7 @@ voice_bot/
 ├── audio_utils.py # WAV/PCM helpers shared by providers
 ├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
 ├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
+├── agent.py       # agent tools (weather/time/calc/search/memory) + session memory
 ├── vad.py         # Silero VAD + turn-taking state machine
 ├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
 ├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()

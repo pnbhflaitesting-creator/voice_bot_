@@ -124,11 +124,23 @@ class Settings:
     # language the user speaks (e.g. "English", "Turkish"). Empty = match input.
     response_language: str = field(default_factory=lambda: _get("RESPONSE_LANGUAGE", ""))
 
+    # ---- Agent (tool calling) ----------------------------------------------
+    # Give the LLM access to tools (weather, time, math, web search, memory).
+    agent_enabled: bool = field(default_factory=lambda: _get_bool("AGENT_ENABLED", True))
+
     @property
     def effective_system_prompt(self) -> str:
         prompt = self.system_prompt
         if self.response_language:
             prompt += f" Always respond in {self.response_language}, no matter what language the user speaks."
+        if self.agent_enabled:
+            prompt += (
+                " You have tools available (weather, current time, a calculator, "
+                "web search, and a memory to remember and recall facts). Use them "
+                "when they help answer accurately. If a tool needs information the "
+                "user hasn't given — like a city for the weather — ask them for it "
+                "first instead of guessing. Keep spoken answers short and natural."
+            )
         return prompt
 
     # ---- Audio --------------------------------------------------------------
