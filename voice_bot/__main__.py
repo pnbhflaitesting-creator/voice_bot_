@@ -25,6 +25,12 @@ def main() -> None:
 
     settings.validate()
 
+    # Fresh log file for this session; everything is recorded there.
+    from .logging_setup import setup_session_logging
+
+    log_path = setup_session_logging()
+    print(f"📝 Logging this session to {log_path}", flush=True)
+
     # Imported here so ``--devices`` works without the heavier deps loaded.
     from .pipeline import VoiceBot
 
@@ -32,6 +38,9 @@ def main() -> None:
         asyncio.run(VoiceBot().run())
     except KeyboardInterrupt:
         print("\n👋 Bye.", flush=True)
+        import logging
+
+        logging.getLogger("voice_bot").info("keyboard interrupt — exiting")
 
 
 if __name__ == "__main__":

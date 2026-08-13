@@ -12,6 +12,7 @@ While the bot is speaking, the VAD keeps running. If the user starts talking
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import time
 from collections.abc import AsyncIterator
@@ -27,6 +28,8 @@ from .recorder import TurnRecorder
 from .stt import create_stt
 from .tts import create_tts
 from .vad import TurnDetector, TurnEvent
+
+log = logging.getLogger(__name__)
 
 # Boundaries: punctuation followed by whitespace/closing bracket. Requiring the
 # trailing whitespace means we only split on a *confirmed* boundary (so "3.14"
@@ -124,6 +127,16 @@ class VoiceBot:
         # barge-in so a new turn can take over immediately.
         self._response_task: asyncio.Task | None = None
         self._bot_speaking = False
+        self._turn_no = 0
+
+        log.info(
+            "config: stt=%s tts=%s llm=%s model=%s lang=%s reply_lang=%s "
+            "denoise=%s agent=%s",
+            settings.stt_provider, settings.tts_provider, settings.llm_provider,
+            settings.gemini_model if settings.llm_provider == "gemini" else settings.openai_llm_model,
+            settings.stt_language or "auto", settings.response_language or "match",
+            self._denoiser.enabled, self._agent is not None,
+        )
 
     async def _warmup(self) -> None:
         """Open connections to all providers up front so the FIRST turn doesn't
@@ -138,10 +151,13 @@ class VoiceBot:
         self._speaker.start()
 
         print("⏳ Warming up connections…", flush=True)
+        t = time.perf_counter()
         await self._warmup()
+        log.info("warmup done in %.0fms", (time.perf_counter() - t) * 1000)
 
         self._mic.start()
         print("🎙️  Listening… (speak into the mic, Ctrl+C to quit)\n", flush=True)
+        log.info("listening")
         try:
             await self._listen_loop()
         finally:
@@ -164,6 +180,7 @@ class VoiceBot:
             if result.event is TurnEvent.SPEECH_START and self._bot_speaking:
                 if settings.allow_interruptions:
                     # Barge-in: user started talking over the bot.
+                    log.info("barge-in: user started speaking over the bot")
                     await self._interrupt()
 
             elif result.event is TurnEvent.TURN_END and result.audio is not None:
@@ -178,11 +195,24 @@ class VoiceBot:
 
     async def _handle_turn(self, audio: np.ndarray) -> None:
         t0 = time.perf_counter()
+        self._turn_no += 1
+        turn = self._turn_no
+        clip_s = len(audio) / settings.input_sample_rate
+        log.info("turn %d: start, clip=%.2fs (%d samples)", turn, clip_s, len(audio))
         try:
             raw_audio = audio  # what the mic heard, before denoising
             if self._denoiser.enabled:
+                t = time.perf_counter()
                 audio = await asyncio.to_thread(self._denoiser.process, audio)
+                log.debug("turn %d: denoise done in %.0fms", turn, (time.perf_counter() - t) * 1000)
+
+            log.info("turn %d: STT (%s) …", turn, settings.stt_provider)
             transcript = await self._stt.transcribe(audio)
+            t_stt = time.perf_counter()
+            log.info(
+                "turn %d: STT done in %.0fms -> %r",
+                turn, (t_stt - t0) * 1000, transcript,
+            )
 
             # Save raw + denoised audio and the transcript for inspection. Done
             # even when the transcript is empty — that's when you most want to
@@ -191,11 +221,12 @@ class VoiceBot:
                 stem = await asyncio.to_thread(
                     self._recorder.save, raw_audio, audio, transcript
                 )
+                log.info("turn %d: saved recording %s", turn, stem)
                 print(f"💾 saved {settings.turns_dir}/{stem}_[raw|clean].wav + .txt", flush=True)
 
             if not transcript:
+                log.info("turn %d: empty transcript, ignoring", turn)
                 return
-            t_stt = time.perf_counter()
             print(f"🧑 You:  {transcript}", flush=True)
             print("🤖 Bot:  ", end="", flush=True)
 
@@ -207,33 +238,52 @@ class VoiceBot:
                 async for tok in self._llm.stream_reply(transcript):
                     if t_first_token is None:
                         t_first_token = time.perf_counter()
+                        log.info("turn %d: LLM first token in %.0fms",
+                                 turn, (t_first_token - t_stt) * 1000)
                     yield tok
 
+            reply_parts: list[str] = []
             async for sentence in _sentence_chunks(_timed_tokens()):
+                reply_parts.append(sentence)
                 print(sentence + " ", end="", flush=True)
                 async for pcm in self._tts.stream(sentence):
                     if t_first_audio is None:
                         t_first_audio = time.perf_counter()
+                        log.info("turn %d: TTS (%s) first audio in %.0fms",
+                                 turn, settings.tts_provider,
+                                 (t_first_audio - (t_first_token or t_stt)) * 1000)
                     self._speaker.play(pcm)
             print(flush=True)
 
-            if settings.show_timings and t_first_audio is not None:
+            reply = " ".join(reply_parts)
+            log.info("turn %d: reply -> %r", turn, reply)
+
+            if t_first_audio is not None:
                 stt_ms = (t_stt - t0) * 1000
                 llm_ms = ((t_first_token or t_stt) - t_stt) * 1000
                 tts_ms = (t_first_audio - (t_first_token or t_stt)) * 1000
-                clip_s = len(audio) / settings.input_sample_rate
-                print(
-                    f"⏱  clip {clip_s:.1f}s · stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
-                    f"tts {tts_ms:.0f}ms · to-first-audio {(t_first_audio - t0) * 1000:.0f}ms",
-                    flush=True,
+                ttfa_ms = (t_first_audio - t0) * 1000
+                log.info(
+                    "turn %d: timings clip=%.1fs stt=%.0fms llm=%.0fms tts=%.0fms "
+                    "to-first-audio=%.0fms",
+                    turn, clip_s, stt_ms, llm_ms, tts_ms, ttfa_ms,
                 )
+                if settings.show_timings:
+                    print(
+                        f"⏱  clip {clip_s:.1f}s · stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
+                        f"tts {tts_ms:.0f}ms · to-first-audio {ttfa_ms:.0f}ms",
+                        flush=True,
+                    )
 
             # Wait for all queued audio to finish playing before listening again.
             done = self._speaker.mark_end()
             await asyncio.to_thread(done.wait)
+            log.info("turn %d: done (total %.0fms)", turn, (time.perf_counter() - t0) * 1000)
         except asyncio.CancelledError:
+            log.info("turn %d: cancelled (barge-in)", turn)
             raise
-        except Exception as exc:  # pragma: no cover - surface API/network errors
+        except Exception as exc:
+            log.exception("turn %d: error", turn)
             print(f"\n[error] {exc}", flush=True)
         finally:
             if not settings.allow_interruptions:
@@ -258,6 +308,7 @@ class VoiceBot:
         self._bot_speaking = False
 
     async def _shutdown(self) -> None:
+        log.info("shutdown: closing after %d turn(s)", self._turn_no)
         if self._response_task and not self._response_task.done():
             self._response_task.cancel()
         if self._mic:
@@ -271,3 +322,4 @@ class VoiceBot:
                 await provider.aclose()
             except Exception:
                 pass
+        log.info("=== session end ===")

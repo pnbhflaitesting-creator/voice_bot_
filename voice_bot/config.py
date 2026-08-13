@@ -198,6 +198,15 @@ class Settings:
     # ~80-100 Hz is safe for speech. Uses scipy if available.
     highpass_hz: int = field(default_factory=lambda: _get_int("HIGHPASS_HZ", 0))
 
+    # ---- Logging ------------------------------------------------------------
+    # A fresh log file is created per session in log_dir, recording every step
+    # (calls, transcripts, replies, tool calls, timings, errors).
+    log_dir: str = field(default_factory=lambda: _get("LOG_DIR", "logs"))
+    log_level: str = field(default_factory=lambda: _get("LOG_LEVEL", "INFO").upper())
+    # Also echo logs to the console (the app already prints a friendly view, so
+    # this is off by default).
+    log_to_console: bool = field(default_factory=lambda: _get_bool("LOG_TO_CONSOLE", False))
+
     # ---- Debug recording ----------------------------------------------------
     # Save, for each detected turn, the raw audio (what the mic heard), the
     # denoised audio (what is sent to STT), and the transcript. Lets you listen

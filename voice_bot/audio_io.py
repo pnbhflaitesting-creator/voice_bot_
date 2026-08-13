@@ -85,6 +85,10 @@ class SpeakerStream:
         # Guards every PortAudio call on the output stream so stream control
         # (stop/close) never races with the worker's write().
         self._stream_lock = threading.Lock()
+        # Leftover odd byte carried between chunks. Some TTS providers (e.g.
+        # Deepgram) stream raw PCM in chunks that don't align to the 2-byte
+        # int16 sample boundary, so a chunk can have an odd byte count.
+        self._carry = b""
         self._interrupt = threading.Event()
         self._playing = threading.Event()  # set while audio is actually going out
         self._done_event: threading.Event | None = None
@@ -130,6 +134,7 @@ class SpeakerStream:
         from two threads at once.
         """
         self._interrupt.set()
+        self._carry = b""
         # Drain anything pending.
         try:
             while True:
@@ -151,15 +156,22 @@ class SpeakerStream:
             item = self._queue.get()
             if item is _END:
                 # End of a response: mark drained and signal any waiter.
+                self._carry = b""  # drop any dangling odd byte
                 self._playing.clear()
                 if self._done_event is not None:
                     self._done_event.set()
                     self._done_event = None
                 continue
             if self._interrupt.is_set():
+                self._carry = b""
                 continue  # dropped due to barge-in
             self._playing.set()
-            samples = np.frombuffer(item, dtype=np.int16)
+            # Align to 2-byte int16 samples, carrying any leftover odd byte to
+            # the next chunk (raw PCM chunks may split mid-sample).
+            data = self._carry + item
+            usable = len(data) - (len(data) % 2)
+            self._carry = data[usable:]
+            samples = np.frombuffer(data[:usable], dtype=np.int16)
             # Write in small sub-chunks, checking for interruption between each
             # so a barge-in stops playback almost immediately.
             for start in range(0, len(samples), self._SUBCHUNK):

@@ -141,6 +141,32 @@ lowest-latency setups replace that with **streaming STT** (transcribe while you
 talk) or a **speech-to-speech "live" API** (Gemini Live / OpenAI Realtime) — see
 the note at the end.
 
+## Logs
+
+Every run writes a fresh log file to `logs/session_<timestamp>.log` recording
+each step — provider config, per-turn STT/LLM/TTS calls with timings, the
+transcript and the reply, every tool call and its result, barge-ins, and full
+tracebacks for any error. The console keeps its friendly emoji view; the log
+file is the detailed trace for debugging.
+
+```bash
+LOG_DIR=logs
+LOG_LEVEL=INFO        # DEBUG for more detail
+LOG_TO_CONSOLE=false  # true to also stream logs to the terminal
+```
+
+A typical turn in the log:
+
+```
+10:15:02.184 INFO  voice_bot.pipeline | turn 3: start, clip=1.80s (28800 samples)
+10:15:02.185 INFO  voice_bot.pipeline | turn 3: STT (deepgram) …
+10:15:03.010 INFO  voice_bot.pipeline | turn 3: STT done in 826ms -> 'what is the weather in tokyo'
+10:15:03.400 INFO  voice_bot.agent    | tool call: get_weather(location='Tokyo')
+10:15:03.951 INFO  voice_bot.agent    | tool get_weather -> 'Weather in Tokyo, Japan: ...' (551ms)
+10:15:04.220 INFO  voice_bot.pipeline | turn 3: reply -> 'It's clear and 24 degrees in Tokyo.'
+10:15:04.221 INFO  voice_bot.pipeline | turn 3: timings clip=1.8s stt=826ms llm=390ms tts=270ms to-first-audio=1486ms
+```
+
 ## Suppressing background noise
 
 There are **two different noise problems** — pick the fix for yours:
@@ -274,6 +300,7 @@ voice_bot/
 ├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
 ├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
 ├── agent.py       # agent tools (weather/time/calc/search/memory) + session memory
+├── logging_setup.py # per-session log file configuration
 ├── vad.py         # Silero VAD + turn-taking state machine
 ├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
 ├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()

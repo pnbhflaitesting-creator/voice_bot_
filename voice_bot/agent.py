@@ -20,13 +20,17 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import math
 import operator
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Session memory
@@ -142,14 +146,21 @@ class Agent:
         tool = self._tools.get(name)
         arg_str = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
         print(f"\n🛠️  {name}({arg_str})", flush=True)
+        log.info("tool call: %s(%s)", name, arg_str)
+        t = time.perf_counter()
         if tool is None:
+            log.warning("tool call: unknown tool %s", name)
             return f"Error: no tool named {name}."
         try:
-            return await tool.run(**arguments)
+            result = await tool.run(**arguments)
         except TypeError as exc:  # bad/missing arguments from the model
+            log.warning("tool %s bad arguments: %s", name, exc)
             return f"Error: bad arguments for {name}: {exc}"
         except Exception as exc:  # pragma: no cover - network/tool errors
+            log.exception("tool %s failed", name)
             return f"Error running {name}: {exc}"
+        log.info("tool %s -> %r (%.0fms)", name, result, (time.perf_counter() - t) * 1000)
+        return result
 
     async def aclose(self) -> None:
         await self._http.aclose()
