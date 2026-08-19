@@ -11,6 +11,10 @@ python-dotenv>=1.0
 # Real web search for the agent's web_search tool (DuckDuckGo SERP)
 ddgs>=6.0
 
+# Optional web UI (python -m voice_bot --web)
+fastapi>=0.110
+uvicorn>=0.29
+
 # Noise suppression (only needed if you enable DENOISE=spectral / HIGHPASS_HZ>0)
 noisereduce>=3.0
 scipy>=1.10

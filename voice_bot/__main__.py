@@ -31,11 +31,17 @@ def main() -> None:
     log_path = setup_session_logging()
     print(f"📝 Logging this session to {log_path}", flush=True)
 
-    # Imported here so ``--devices`` works without the heavier deps loaded.
-    from .pipeline import VoiceBot
-
+    web = "--web" in sys.argv
     try:
-        asyncio.run(VoiceBot().run())
+        if web:
+            from .web import run_web
+
+            asyncio.run(run_web())
+        else:
+            # Imported here so ``--devices`` works without the heavier deps loaded.
+            from .pipeline import VoiceBot
+
+            asyncio.run(VoiceBot().run())
     except KeyboardInterrupt:
         print("\n👋 Bye.", flush=True)
         import logging

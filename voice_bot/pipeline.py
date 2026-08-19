@@ -23,6 +23,7 @@ from .agent import Agent
 from .audio_io import MicrophoneStream, SpeakerStream
 from .config import settings
 from .denoise import Denoiser
+from .events import EventBus
 from .llm import create_llm
 from .recorder import TurnRecorder
 from .stt import create_stt
@@ -90,8 +91,12 @@ async def _sentence_chunks(tokens: AsyncIterator[str]) -> AsyncIterator[str]:
 
 class VoiceBot:
     def __init__(self) -> None:
+        # Event bus for the optional web UI (no-op with no subscribers).
+        self.events = EventBus()
         # Providers are chosen by env (STT_PROVIDER / TTS_PROVIDER / LLM_PROVIDER).
         self._agent = Agent() if settings.agent_enabled else None
+        if self._agent is not None:
+            self._agent.event_sink = self.events.emit  # surface tool calls to UI
         self._stt = create_stt()
         self._tts = create_tts()
         self._llm = create_llm(agent=self._agent)
@@ -129,6 +134,9 @@ class VoiceBot:
         self._bot_speaking = False
         self._turn_no = 0
         self._stt_streaming = getattr(self._stt, "streaming", False)
+        # Mic on/off (the web UI can switch to text-only "chat" mode).
+        self._mic_enabled = True
+        self._mode = "voice"
 
         log.info(
             "config: stt=%s tts=%s llm=%s model=%s lang=%s reply_lang=%s "
@@ -152,13 +160,20 @@ class VoiceBot:
         self._speaker.start()
 
         print("⏳ Warming up connections…", flush=True)
+        self.events.emit({"type": "status", "status": "connecting"})
         t = time.perf_counter()
         await self._warmup()
         log.info("warmup done in %.0fms", (time.perf_counter() - t) * 1000)
 
         self._mic.start()
+
+        # Greet first so the user isn't met with silence.
+        if settings.greeting:
+            await self.say(settings.greeting)
+
         print("🎙️  Listening… (speak into the mic, Ctrl+C to quit)\n", flush=True)
         log.info("listening")
+        self.events.emit({"type": "status", "status": "listening"})
         try:
             await self._listen_loop()
         finally:
@@ -167,6 +182,11 @@ class VoiceBot:
     async def _listen_loop(self) -> None:
         while True:
             frame = await self._frame_queue.get()
+
+            # Mic disabled (e.g. the UI switched to text-only chat mode): drop
+            # frames so nothing is transcribed until voice is turned back on.
+            if not self._mic_enabled:
+                continue
 
             # Half-duplex mode (no barge-in): while the bot is speaking, ignore
             # the microphone entirely. Without echo cancellation the mic hears
@@ -238,72 +258,172 @@ class VoiceBot:
                 log.info("turn %d: empty transcript, ignoring", turn)
                 return
             print(f"🧑 You:  {transcript}", flush=True)
-            print("🤖 Bot:  ", end="", flush=True)
+            self.events.emit({"type": "message", "role": "user", "text": transcript})
 
-            t_first_token: float | None = None
-            t_first_audio: float | None = None
-
-            async def _timed_tokens() -> AsyncIterator[str]:
-                nonlocal t_first_token
-                async for tok in self._llm.stream_reply(transcript):
-                    if t_first_token is None:
-                        t_first_token = time.perf_counter()
-                        log.info("turn %d: LLM first token in %.0fms",
-                                 turn, (t_first_token - t_stt) * 1000)
-                    yield tok
-
-            reply_parts: list[str] = []
-            async for sentence in _sentence_chunks(_timed_tokens()):
-                reply_parts.append(sentence)
-                print(sentence + " ", end="", flush=True)
-                async for pcm in self._tts.stream(sentence):
-                    if t_first_audio is None:
-                        t_first_audio = time.perf_counter()
-                        log.info("turn %d: TTS (%s) first audio in %.0fms",
-                                 turn, settings.tts_provider,
-                                 (t_first_audio - (t_first_token or t_stt)) * 1000)
-                    self._speaker.play(pcm)
-            print(flush=True)
-
-            reply = " ".join(reply_parts)
-            log.info("turn %d: reply -> %r", turn, reply)
-
-            if t_first_audio is not None:
-                # llm here also covers any tool calls (see per-tool log lines).
-                llm_ms = ((t_first_token or t_stt) - t_stt) * 1000
-                tts_ms = (t_first_audio - (t_first_token or t_stt)) * 1000
-                ttfa_ms = (t_first_audio - t0) * 1000
-                log.info(
-                    "turn %d: timings clip=%.1fs denoise=%.0fms stt=%.0fms llm=%.0fms "
-                    "tts=%.0fms to-first-audio=%.0fms",
-                    turn, clip_s, denoise_ms, stt_ms, llm_ms, tts_ms, ttfa_ms,
-                )
-                if settings.show_timings:
-                    dn = f"denoise {denoise_ms:.0f}ms · " if denoise_ms else ""
-                    print(
-                        f"⏱  clip {clip_s:.1f}s · {dn}stt {stt_ms:.0f}ms · llm {llm_ms:.0f}ms · "
-                        f"tts {tts_ms:.0f}ms · to-first-audio {ttfa_ms:.0f}ms",
-                        flush=True,
-                    )
-
-            # Wait for all queued audio to finish playing before listening again.
-            done = self._speaker.mark_end()
-            await asyncio.to_thread(done.wait)
-            log.info("turn %d: done (total %.0fms)", turn, (time.perf_counter() - t0) * 1000)
+            await self._speak_reply(
+                transcript, turn=turn, t0=t0, denoise_ms=denoise_ms, stt_ms=stt_ms, clip_s=clip_s
+            )
         except asyncio.CancelledError:
             log.info("turn %d: cancelled (barge-in)", turn)
             raise
         except Exception as exc:
             log.exception("turn %d: error", turn)
             print(f"\n[error] {exc}", flush=True)
+            self.events.emit({"type": "error", "text": str(exc)})
         finally:
-            if not settings.allow_interruptions:
-                # Discard mic frames captured during playback (they contain the
-                # bot's own audio) and clear VAD state before we start listening.
-                while not self._frame_queue.empty():
-                    self._frame_queue.get_nowait()
-                self._vad.reset()
-            self._bot_speaking = False
+            self._finish_speaking()
+
+    async def _speak_reply(
+        self,
+        transcript: str,
+        *,
+        turn: int,
+        t0: float,
+        denoise_ms: float = 0.0,
+        stt_ms: float = 0.0,
+        clip_s: float = 0.0,
+    ) -> None:
+        """Shared reply path: LLM (streamed) -> sentence-chunked TTS -> speaker.
+
+        Used by both spoken turns and typed (chat) turns.
+        """
+        print("🤖 Bot:  ", end="", flush=True)
+        self.events.emit({"type": "status", "status": "thinking"})
+
+        t_llm_start = time.perf_counter()
+        t_first_token: float | None = None
+        t_first_audio: float | None = None
+
+        async def _timed_tokens() -> AsyncIterator[str]:
+            nonlocal t_first_token
+            async for tok in self._llm.stream_reply(transcript):
+                if t_first_token is None:
+                    t_first_token = time.perf_counter()
+                    log.info("turn %d: LLM first token in %.0fms",
+                             turn, (t_first_token - t_llm_start) * 1000)
+                yield tok
+
+        reply_parts: list[str] = []
+        async for sentence in _sentence_chunks(_timed_tokens()):
+            reply_parts.append(sentence)
+            print(sentence + " ", end="", flush=True)
+            self.events.emit({"type": "bot_partial", "text": sentence})
+            async for pcm in self._tts.stream(sentence):
+                if t_first_audio is None:
+                    t_first_audio = time.perf_counter()
+                    self.events.emit({"type": "status", "status": "speaking"})
+                    log.info("turn %d: TTS (%s) first audio in %.0fms",
+                             turn, settings.tts_provider,
+                             (t_first_audio - (t_first_token or t_llm_start)) * 1000)
+                self._speaker.play(pcm)
+        print(flush=True)
+
+        reply = " ".join(reply_parts)
+        log.info("turn %d: reply -> %r", turn, reply)
+        self.events.emit({"type": "message", "role": "bot", "text": reply})
+
+        if t_first_audio is not None:
+            llm_ms = ((t_first_token or t_llm_start) - t_llm_start) * 1000
+            tts_ms = (t_first_audio - (t_first_token or t_llm_start)) * 1000
+            ttfa_ms = (t_first_audio - t0) * 1000
+            log.info(
+                "turn %d: timings clip=%.1fs denoise=%.0fms stt=%.0fms llm=%.0fms "
+                "tts=%.0fms to-first-audio=%.0fms",
+                turn, clip_s, denoise_ms, stt_ms, llm_ms, tts_ms, ttfa_ms,
+            )
+            self.events.emit({
+                "type": "timings", "turn": turn, "denoise_ms": round(denoise_ms),
+                "stt_ms": round(stt_ms), "llm_ms": round(llm_ms),
+                "tts_ms": round(tts_ms), "ttfa_ms": round(ttfa_ms),
+            })
+            if settings.show_timings:
+                dn = f"denoise {denoise_ms:.0f}ms · " if denoise_ms else ""
+                st = f"stt {stt_ms:.0f}ms · " if stt_ms else ""
+                print(
+                    f"⏱  {dn}{st}llm {llm_ms:.0f}ms · tts {tts_ms:.0f}ms · "
+                    f"to-first-audio {ttfa_ms:.0f}ms",
+                    flush=True,
+                )
+
+        # Wait for all queued audio to finish playing before listening again.
+        done = self._speaker.mark_end()
+        await asyncio.to_thread(done.wait)
+        log.info("turn %d: done (total %.0fms)", turn, (time.perf_counter() - t0) * 1000)
+
+    def _finish_speaking(self) -> None:
+        if not settings.allow_interruptions:
+            # Discard mic frames captured during playback (they contain the
+            # bot's own audio) and clear VAD state before we start listening.
+            while not self._frame_queue.empty():
+                self._frame_queue.get_nowait()
+            self._vad.reset()
+        self._bot_speaking = False
+        status = "listening" if self._mode != "chat" else "idle"
+        self.events.emit({"type": "status", "status": status})
+
+    async def say(self, text: str) -> None:
+        """Speak a fixed line (greeting, etc.) with TTS — no LLM involved."""
+        text = text.strip()
+        if not text:
+            return
+        self._bot_speaking = True
+        self.events.emit({"type": "status", "status": "speaking"})
+        self.events.emit({"type": "message", "role": "bot", "text": text})
+        print(f"🤖 Bot:  {text}", flush=True)
+
+        async def _once() -> AsyncIterator[str]:
+            yield text
+
+        try:
+            async for sentence in _sentence_chunks(_once()):
+                async for pcm in self._tts.stream(sentence):
+                    self._speaker.play(pcm)
+            done = self._speaker.mark_end()
+            await asyncio.to_thread(done.wait)
+        except Exception as exc:  # pragma: no cover
+            log.exception("say() failed")
+            self.events.emit({"type": "error", "text": str(exc)})
+        finally:
+            self._finish_speaking()
+
+    async def respond_to_text(self, text: str) -> None:
+        """Handle a typed message from the UI: skip STT, run LLM -> TTS."""
+        text = text.strip()
+        if not text:
+            return
+        if self._bot_speaking:
+            await self._interrupt()
+        self._bot_speaking = True
+        self._turn_no += 1
+        turn = self._turn_no
+        log.info("turn %d: text input -> %r", turn, text)
+        print(f"⌨️  You:  {text}", flush=True)
+        self.events.emit({"type": "message", "role": "user", "text": text})
+        self._response_task = asyncio.create_task(self._run_text_turn(text, turn))
+
+    async def _run_text_turn(self, text: str, turn: int) -> None:
+        t0 = time.perf_counter()
+        try:
+            await self._speak_reply(text, turn=turn, t0=t0)
+        except asyncio.CancelledError:
+            log.info("turn %d: cancelled (barge-in)", turn)
+            raise
+        except Exception as exc:
+            log.exception("turn %d: error", turn)
+            self.events.emit({"type": "error", "text": str(exc)})
+        finally:
+            self._finish_speaking()
+
+    def set_mic_enabled(self, enabled: bool) -> None:
+        self._mic_enabled = enabled
+        log.info("mic %s", "enabled" if enabled else "disabled")
+        self.events.emit({"type": "status", "status": "listening" if enabled else "idle"})
+
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode
+        # In chat mode the mic is off; in voice/push-to-talk the UI drives the mic.
+        self.set_mic_enabled(mode == "voice")
+        log.info("mode set to %s", mode)
 
     async def _interrupt(self) -> None:
         """Cancel the in-flight response and stop playback."""

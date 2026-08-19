@@ -14,6 +14,7 @@ and streams again — repeating until the model produces a spoken answer. Normal
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol
 
@@ -64,6 +65,7 @@ class OpenAICompatLLM:
             "model": self._model,
             "messages": messages,
             "max_tokens": settings.max_reply_tokens,
+            "temperature": settings.temperature,
         }
         if self._extra_body:
             kwargs["extra_body"] = self._extra_body
@@ -138,8 +140,15 @@ class OpenAICompatLLM:
                     ],
                 }
             )
-            for tc in ordered:
-                result = await self._agent.execute(tc["name"], _parse_arguments(tc["args"]))
+            # Run all requested tools concurrently (e.g. several web searches at
+            # once), preserving order when appending their results.
+            results = await asyncio.gather(
+                *(
+                    self._agent.execute(tc["name"], _parse_arguments(tc["args"]))
+                    for tc in ordered
+                )
+            )
+            for tc, result in zip(ordered, results):
                 self._history.append(
                     {"role": "tool", "tool_call_id": tc["id"], "content": result}
                 )

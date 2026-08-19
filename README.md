@@ -56,9 +56,27 @@ In `.env`, pick your providers and set only the keys they need:
 ## Run
 
 ```bash
-python -m voice_bot            # start talking
+python -m voice_bot            # terminal voice bot
+python -m voice_bot --web      # same bot + a web UI at http://127.0.0.1:8000
 python -m voice_bot --devices  # list audio devices (to set INPUT_DEVICE/OUTPUT_DEVICE)
 ```
+
+The bot **greets you first** ("How can I help you today?") and then listens.
+
+### Web UI
+
+`--web` runs the normal audio pipeline **and** a small web server. Open
+`http://127.0.0.1:8000` on the same machine (mic + speakers stay on that
+machine) to get a clean chat view that mirrors everything the terminal shows —
+live transcripts, replies, tool calls, and per-turn timings. Three modes:
+
+- **🎤 Voice (free)** — just talk, continuous (same as the terminal).
+- **👆 Push-to-talk** — hold the button (or Space) while speaking.
+- **⌨️ Chat** — mic off; type instead.
+
+You can **type a message at any time** in any mode. It streams through the same
+LLM → TTS path (the reply is spoken on the host machine and shown in the UI).
+Built with FastAPI + a WebSocket; no build step, no external assets.
 
 Then just talk. Pause when you're done and the bot will reply. Press **Ctrl+C** to quit.
 
@@ -311,6 +329,9 @@ voice_bot/
 ├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
 ├── agent.py       # agent tools (weather/time/calc/search/memory) + session memory
 ├── logging_setup.py # per-session log file configuration
+├── events.py      # tiny async pub/sub bus (pipeline → web UI)
+├── web.py         # FastAPI + WebSocket server for --web
+├── web_ui.html    # the web UI (served as-is)
 ├── vad.py         # Silero VAD + turn-taking state machine
 ├── stt.py         # STT providers (OpenAI/Deepgram/ElevenLabs) + create_stt()
 ├── llm.py         # LLM providers (Gemini/OpenAI) + create_llm()

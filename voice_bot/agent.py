@@ -149,6 +149,8 @@ class Agent:
         self.memory = SessionMemory()
         self._http = httpx.AsyncClient(timeout=15.0)
         self._tools: dict[str, Tool] = {t.name: t for t in self._build_tools()}
+        # Optional callback (set by the pipeline) to surface tool calls to the UI.
+        self.event_sink = None
 
     # -- interface used by the LLM ----------------------------------------
     def schemas(self) -> list[dict]:
@@ -163,6 +165,8 @@ class Agent:
         arg_str = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
         print(f"\n🛠️  {name}({arg_str})", flush=True)
         log.info("tool call: %s(%s)", name, arg_str)
+        if self.event_sink is not None:
+            self.event_sink({"type": "tool", "name": name, "args": arg_str})
         t = time.perf_counter()
         if tool is None:
             log.warning("tool call: unknown tool %s", name)
@@ -331,7 +335,7 @@ class Agent:
         # actual result pages — unlike the Instant Answer API, which only covers
         # entities/definitions. Runs in a thread since the library is sync.
         try:
-            results = await asyncio.to_thread(_ddg_search, query, 5)
+            results = await asyncio.to_thread(_ddg_search, query, 6)
         except Exception as exc:
             log.warning("web_search via ddgs failed: %s", exc)
             results = None

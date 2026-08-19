@@ -111,7 +111,13 @@ class Settings:
 
     # ---- LLM (shared) -------------------------------------------------------
     # Cap the reply length so the LLM doesn't ramble (faster, more responsive).
-    max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 200))
+    max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 400))
+    # Sampling temperature (0 = deterministic, higher = more varied).
+    temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.2))
+    # Spoken on startup before listening. Empty = no greeting.
+    greeting: str = field(
+        default_factory=lambda: _get("GREETING", "How can I help you today?")
+    )
     system_prompt: str = field(
         default_factory=lambda: _get(
             "SYSTEM_PROMPT",
@@ -197,6 +203,11 @@ class Settings:
     # High-pass filter cutoff in Hz to cut low-frequency rumble/hum (0 = off).
     # ~80-100 Hz is safe for speech. Uses scipy if available.
     highpass_hz: int = field(default_factory=lambda: _get_int("HIGHPASS_HZ", 0))
+
+    # ---- Web UI -------------------------------------------------------------
+    # Where the optional web UI (python -m voice_bot --web) listens.
+    web_host: str = field(default_factory=lambda: _get("WEB_HOST", "127.0.0.1"))
+    web_port: int = field(default_factory=lambda: _get_int("WEB_PORT", 8000))
 
     # ---- Logging ------------------------------------------------------------
     # A fresh log file is created per session in log_dir, recording every step
