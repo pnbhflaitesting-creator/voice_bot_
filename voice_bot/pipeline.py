@@ -38,22 +38,17 @@ log = logging.getLogger(__name__)
 _SENTENCE_BOUNDARY = re.compile(r"[.!?…]+[\s\"')\]]+")
 # The first chunk may also break at a clause boundary (comma/semicolon/colon).
 _CLAUSE_BOUNDARY = re.compile(r"[.!?…,;:]+[\s\"')\]]+")
-# Emit the first chunk at the earliest boundary at or past this length, so the
-# bot starts talking quickly without sounding choppy.
-_FIRST_CHUNK_MIN_CHARS = 24
-# Speak an in-progress buffer once it gets this long even without punctuation.
-_MAX_CHARS_BEFORE_FLUSH = 200
 
 
 def _next_break(buffer: str, first: bool) -> int | None:
     """Index just past the first usable boundary in ``buffer``, or None.
 
     For the first chunk we break at the earliest clause boundary at or past
-    ``_FIRST_CHUNK_MIN_CHARS`` (low latency); afterwards only at sentence ends
+    ``TTS_FIRST_CHUNK_CHARS`` (low latency); afterwards only at sentence ends
     (natural prosody). A boundary counts only if some text follows it.
     """
     pattern = _CLAUSE_BOUNDARY if first else _SENTENCE_BOUNDARY
-    min_chars = _FIRST_CHUNK_MIN_CHARS if first else 1
+    min_chars = settings.tts_first_chunk_chars if first else 1
     for match in pattern.finditer(buffer):
         end = match.end()
         if end >= min_chars and end < len(buffer):
@@ -80,7 +75,7 @@ async def _sentence_chunks(tokens: AsyncIterator[str]) -> AsyncIterator[str]:
             if chunk:
                 first = False
                 yield chunk
-        if len(buffer) >= _MAX_CHARS_BEFORE_FLUSH and " " in buffer:
+        if len(buffer) >= settings.tts_max_chunk_chars and " " in buffer:
             head, buffer = buffer.rsplit(" ", 1)
             if head.strip():
                 first = False

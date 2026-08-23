@@ -108,12 +108,33 @@ class Settings:
 
     # ---- LLM: OpenAI --------------------------------------------------------
     openai_llm_model: str = field(default_factory=lambda: _get("OPENAI_LLM_MODEL", "gpt-4o-mini"))
+    # Optional custom endpoint (Azure deployment, local server, gateway, …).
+    # Empty = the standard OpenAI API.
+    openai_base_url: str = field(default_factory=lambda: _get("OPENAI_BASE_URL", ""))
+    # Reasoning effort for reasoning-capable OpenAI models (gpt-5, o-series):
+    # "minimal" is effectively reasoning-off; also low/medium/high. Leave EMPTY
+    # for non-reasoning models (e.g. gpt-4o-mini), which reject this parameter.
+    openai_reasoning_effort: str = field(
+        default_factory=lambda: _get("OPENAI_REASONING_EFFORT", "")
+    )
 
     # ---- LLM (shared) -------------------------------------------------------
     # Cap the reply length so the LLM doesn't ramble (faster, more responsive).
     max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 400))
     # Sampling temperature (0 = deterministic, higher = more varied).
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.2))
+    # ---- TTS chunking (how soon the bot starts speaking) --------------------
+    # The reply is streamed to TTS in chunks so audio starts before the LLM has
+    # finished. The FIRST chunk is spoken as soon as the LLM emits a clause
+    # boundary at/after this many characters (lower = starts sooner, choppier).
+    tts_first_chunk_chars: int = field(
+        default_factory=lambda: _get_int("TTS_FIRST_CHUNK_CHARS", 24)
+    )
+    # If no sentence boundary appears, flush a chunk once it reaches this length.
+    tts_max_chunk_chars: int = field(
+        default_factory=lambda: _get_int("TTS_MAX_CHUNK_CHARS", 200)
+    )
+
     # Spoken on startup before listening. Empty = no greeting.
     greeting: str = field(
         default_factory=lambda: _get("GREETING", "How can I help you today?")

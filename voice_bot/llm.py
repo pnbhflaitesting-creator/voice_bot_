@@ -176,10 +176,16 @@ def create_llm(agent: "Agent | None" = None) -> LLMProvider:
             agent=agent,
         )
     if provider == "openai":
+        extra_body = None
+        if settings.openai_reasoning_effort:
+            # e.g. "minimal" to turn reasoning off on gpt-5 / o-series. Sent via
+            # extra_body so the SDK forwards it raw. Omit for non-reasoning models.
+            extra_body = {"reasoning_effort": settings.openai_reasoning_effort}
         return OpenAICompatLLM(
             api_key=settings.openai_api_key,
-            base_url=None,  # default OpenAI endpoint
+            base_url=settings.openai_base_url or None,  # custom endpoint or default
             model=settings.openai_llm_model,
+            extra_body=extra_body,
             agent=agent,
         )
     raise ValueError(f"Unknown LLM provider: {provider}")
