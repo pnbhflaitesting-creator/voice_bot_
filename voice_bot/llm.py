@@ -18,7 +18,9 @@ import asyncio
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Protocol
 
-from openai import AsyncOpenAI
+import logging
+
+from openai import AsyncOpenAI, BadRequestError
 
 from .agent import _parse_arguments
 from .config import settings
@@ -26,8 +28,12 @@ from .config import settings
 if TYPE_CHECKING:
     from .agent import Agent
 
+log = logging.getLogger(__name__)
+
 # Safety cap on how many tool rounds a single turn may take.
 _MAX_TOOL_ROUNDS = 5
+# Params we may send that a given model might reject; never strip these.
+_PROTECTED_PARAMS = {"model", "messages", "stream", "tools", "tool_choice", "extra_body"}
 
 
 class LLMProvider(Protocol):
@@ -48,11 +54,18 @@ class OpenAICompatLLM:
         model: str,
         extra_body: dict | None = None,
         agent: "Agent | None" = None,
+        token_param: str = "max_tokens",
     ) -> None:
         self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         self._model = model
         self._extra_body = extra_body or None
         self._agent = agent
+        # gpt-5 / o-series use "max_completion_tokens"; older models / Gemini use
+        # "max_tokens". Set per provider in create_llm().
+        self._token_param = token_param
+        # Params dropped because this model rejected them (learned once, at the
+        # first request) so we don't repeat the failing call every turn.
+        self._dropped: set[str] = set()
         self._history: list[dict] = [
             {"role": "system", "content": settings.effective_system_prompt}
         ]
@@ -64,26 +77,63 @@ class OpenAICompatLLM:
         kwargs: dict = {
             "model": self._model,
             "messages": messages,
-            "max_tokens": settings.max_reply_tokens,
+            self._token_param: settings.max_reply_tokens,
             "temperature": settings.temperature,
         }
         if self._extra_body:
-            kwargs["extra_body"] = self._extra_body
+            kwargs["extra_body"] = dict(self._extra_body)
         if self._agent is not None:
             kwargs["tools"] = self._agent.schemas()
             kwargs["tool_choice"] = "auto"
         kwargs.update(overrides)
+        # Remove any params we've already learned this model rejects.
+        for name in self._dropped:
+            kwargs.pop(name, None)
+            if isinstance(kwargs.get("extra_body"), dict):
+                kwargs["extra_body"].pop(name, None)
+        if isinstance(kwargs.get("extra_body"), dict) and not kwargs["extra_body"]:
+            kwargs.pop("extra_body")
         return kwargs
+
+    def _drop_rejected_param(self, kwargs: dict, message: str) -> list[str]:
+        """Remove params whose name the API named as unsupported. Returns them."""
+        removed = []
+        for name in list(kwargs):
+            if name in _PROTECTED_PARAMS:
+                continue
+            if name in message:
+                kwargs.pop(name, None)
+                removed.append(name)
+        eb = kwargs.get("extra_body")
+        if isinstance(eb, dict):
+            for name in list(eb):
+                if name in message:
+                    eb.pop(name, None)
+                    removed.append(name)
+            if not eb:
+                kwargs.pop("extra_body", None)
+        return removed
+
+    async def _create(self, **kwargs):
+        """chat.completions.create with self-healing on unsupported-param 400s."""
+        for _ in range(4):
+            try:
+                return await self._client.chat.completions.create(**kwargs)
+            except BadRequestError as exc:
+                removed = self._drop_rejected_param(kwargs, str(exc))
+                if not removed:
+                    raise
+                self._dropped.update(removed)
+                log.warning("LLM %s rejected %s; dropped and retrying",
+                            self._model, ", ".join(removed))
+        return await self._client.chat.completions.create(**kwargs)
 
     async def warmup(self) -> None:
         try:
-            await self._client.chat.completions.create(
-                model=self._model,
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=1,
-                stream=False,
-                **({"extra_body": self._extra_body} if self._extra_body else {}),
-            )
+            await self._create(**self._kwargs(
+                [{"role": "user", "content": "hi"}], stream=False,
+                **{self._token_param: 1},
+            ))
         except Exception:
             pass
 
@@ -91,9 +141,7 @@ class OpenAICompatLLM:
         self._history.append({"role": "user", "content": user_text})
 
         for _ in range(_MAX_TOOL_ROUNDS):
-            stream = await self._client.chat.completions.create(
-                **self._kwargs(self._history, stream=True)
-            )
+            stream = await self._create(**self._kwargs(self._history, stream=True))
 
             content_parts: list[str] = []
             # index -> {"id", "name", "args"} accumulated across stream deltas
@@ -174,12 +222,14 @@ def create_llm(agent: "Agent | None" = None) -> LLMProvider:
             model=settings.gemini_model,
             extra_body=extra_body,
             agent=agent,
+            token_param="max_tokens",  # Gemini's OpenAI-compat endpoint
         )
     if provider == "openai":
         extra_body = None
         if settings.openai_reasoning_effort:
             # e.g. "minimal" to turn reasoning off on gpt-5 / o-series. Sent via
-            # extra_body so the SDK forwards it raw. Omit for non-reasoning models.
+            # extra_body so the SDK forwards it raw. Omit for non-reasoning models
+            # (they reject it — the client also self-heals if it slips through).
             extra_body = {"reasoning_effort": settings.openai_reasoning_effort}
         return OpenAICompatLLM(
             api_key=settings.openai_api_key,
@@ -187,5 +237,7 @@ def create_llm(agent: "Agent | None" = None) -> LLMProvider:
             model=settings.openai_llm_model,
             extra_body=extra_body,
             agent=agent,
+            # gpt-5.x / o-series require max_completion_tokens; gpt-4o accepts it too.
+            token_param="max_completion_tokens",
         )
     raise ValueError(f"Unknown LLM provider: {provider}")
