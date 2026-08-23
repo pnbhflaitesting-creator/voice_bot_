@@ -186,6 +186,9 @@ class Settings:
     allow_interruptions: bool = field(
         default_factory=lambda: _get_bool("ALLOW_INTERRUPTIONS", True)
     )
+    # After the bot starts speaking, ignore barge-in for this long. Prevents the
+    # bot's own audio (if the mic hears it) from instantly interrupting itself.
+    echo_guard_ms: int = field(default_factory=lambda: _get_int("ECHO_GUARD_MS", 400))
 
     # ---- Noise suppression (applied to the utterance before STT) ------------
     # "none"     : off (default).

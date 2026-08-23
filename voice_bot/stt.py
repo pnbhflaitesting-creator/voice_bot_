@@ -255,6 +255,12 @@ class DeepgramStreamingSTT:
     async def warmup(self) -> None:
         await self._connect()
 
+    def reset(self) -> None:
+        """Drop any accumulated transcript (e.g. after a barge-in or when the
+        bot starts speaking) so stale words never leak into the next turn."""
+        self._finals.clear()
+        self._final_event.clear()
+
     async def feed(self, frame: np.ndarray) -> None:
         if not self._ws_ok():
             return

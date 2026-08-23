@@ -132,6 +132,8 @@ class VoiceBot:
         # barge-in so a new turn can take over immediately.
         self._response_task: asyncio.Task | None = None
         self._bot_speaking = False
+        # perf_counter() when the bot's audio actually started (0 = not yet).
+        self._bot_speech_start = 0.0
         self._turn_no = 0
         self._stt_streaming = getattr(self._stt, "streaming", False)
         # Mic on/off (the web UI can switch to text-only "chat" mode).
@@ -196,15 +198,17 @@ class VoiceBot:
             if self._bot_speaking and not settings.allow_interruptions:
                 continue
 
-            # Streaming STT: push each live frame so transcription happens while
-            # the user is still talking (near-zero latency at turn end).
-            if self._stt_streaming:
+            # Streaming STT: push live frames so transcription happens while the
+            # user is still talking. Crucially, do NOT feed while the bot is
+            # speaking — if the mic hears the bot (echo / a loopback input
+            # device), feeding it would transcribe the bot and answer itself.
+            if self._stt_streaming and not self._bot_speaking:
                 await self._stt.feed(frame)
 
             result = self._vad.process(frame)
 
             if result.event is TurnEvent.SPEECH_START and self._bot_speaking:
-                if settings.allow_interruptions:
+                if settings.allow_interruptions and not self._within_echo_guard():
                     # Barge-in: user started talking over the bot.
                     log.info("barge-in: user started speaking over the bot")
                     await self._interrupt()
@@ -215,7 +219,7 @@ class VoiceBot:
                     await self._interrupt()
                 # Mark busy immediately so a follow-up turn can't spawn a second
                 # overlapping response during STT (before audio starts playing).
-                self._bot_speaking = True
+                self._begin_speaking()
                 # Handle this turn concurrently so we keep reading the mic.
                 self._response_task = asyncio.create_task(self._handle_turn(result.audio))
 
@@ -311,6 +315,7 @@ class VoiceBot:
             async for pcm in self._tts.stream(sentence):
                 if t_first_audio is None:
                     t_first_audio = time.perf_counter()
+                    self._bot_speech_start = t_first_audio  # start echo-guard clock
                     self.events.emit({"type": "status", "status": "speaking"})
                     log.info("turn %d: TTS (%s) first audio in %.0fms",
                              turn, settings.tts_provider,
@@ -350,13 +355,36 @@ class VoiceBot:
         await asyncio.to_thread(done.wait)
         log.info("turn %d: done (total %.0fms)", turn, (time.perf_counter() - t0) * 1000)
 
+    def _begin_speaking(self) -> None:
+        """Mark the bot as speaking and clear any streamed STT so the bot's own
+        audio (if the mic hears it) can't leak into the next transcript."""
+        self._bot_speaking = True
+        self._bot_speech_start = 0.0  # echo-guard clock starts at first audio
+        self._reset_streaming_stt()
+
+    def _reset_streaming_stt(self) -> None:
+        if self._stt_streaming:
+            reset = getattr(self._stt, "reset", None)
+            if reset:
+                reset()
+
+    def _within_echo_guard(self) -> bool:
+        if not self._bot_speech_start:
+            return False  # bot is thinking, not yet audible — allow barge-in
+        elapsed = (time.perf_counter() - self._bot_speech_start) * 1000
+        return elapsed < settings.echo_guard_ms
+
     def _finish_speaking(self) -> None:
+        self._bot_speech_start = 0.0
         if not settings.allow_interruptions:
             # Discard mic frames captured during playback (they contain the
             # bot's own audio) and clear VAD state before we start listening.
             while not self._frame_queue.empty():
                 self._frame_queue.get_nowait()
             self._vad.reset()
+        # Streaming STT was not fed during playback; clear any residue so the
+        # next user turn starts from a clean transcript.
+        self._reset_streaming_stt()
         self._bot_speaking = False
         status = "listening" if self._mode != "chat" else "idle"
         self.events.emit({"type": "status", "status": status})
@@ -366,7 +394,7 @@ class VoiceBot:
         text = text.strip()
         if not text:
             return
-        self._bot_speaking = True
+        self._begin_speaking()
         self.events.emit({"type": "status", "status": "speaking"})
         self.events.emit({"type": "message", "role": "bot", "text": text})
         print(f"🤖 Bot:  {text}", flush=True)
@@ -375,8 +403,12 @@ class VoiceBot:
             yield text
 
         try:
+            first = True
             async for sentence in _sentence_chunks(_once()):
                 async for pcm in self._tts.stream(sentence):
+                    if first:
+                        self._bot_speech_start = time.perf_counter()
+                        first = False
                     self._speaker.play(pcm)
             done = self._speaker.mark_end()
             await asyncio.to_thread(done.wait)
@@ -393,7 +425,7 @@ class VoiceBot:
             return
         if self._bot_speaking:
             await self._interrupt()
-        self._bot_speaking = True
+        self._begin_speaking()
         self._turn_no += 1
         turn = self._turn_no
         log.info("turn %d: text input -> %r", turn, text)
@@ -437,6 +469,10 @@ class VoiceBot:
             except asyncio.CancelledError:
                 pass
         self._bot_speaking = False
+        self._bot_speech_start = 0.0
+        # Drop anything the streaming STT buffered before the interrupt so the
+        # barge-in turn starts from a clean transcript.
+        self._reset_streaming_stt()
 
     async def _shutdown(self) -> None:
         log.info("shutdown: closing after %d turn(s)", self._turn_no)
