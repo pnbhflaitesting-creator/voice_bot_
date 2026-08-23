@@ -210,6 +210,14 @@ class Settings:
     # After the bot starts speaking, ignore barge-in for this long. Prevents the
     # bot's own audio (if the mic hears it) from instantly interrupting itself.
     echo_guard_ms: int = field(default_factory=lambda: _get_int("ECHO_GUARD_MS", 400))
+    # Acoustic echo cancellation: subtract the bot's played audio from the mic so
+    # barge-in works even when the mic hears the speaker. Enables true full-duplex.
+    echo_cancellation: bool = field(
+        default_factory=lambda: _get_bool("ECHO_CANCELLATION", False)
+    )
+    # AEC adaptive-filter length (echo tail it can model) and step size.
+    aec_filter_ms: int = field(default_factory=lambda: _get_int("AEC_FILTER_MS", 250))
+    aec_mu: float = field(default_factory=lambda: _get_float("AEC_MU", 0.3))
 
     # ---- Noise suppression (applied to the utterance before STT) ------------
     # "none"     : off (default).

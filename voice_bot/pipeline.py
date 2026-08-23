@@ -123,6 +123,17 @@ class VoiceBot:
         self._frame_queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=200)
         self._mic: MicrophoneStream | None = None
 
+        # Acoustic echo cancellation (optional): removes the bot's audio from the
+        # mic so barge-in works even when the mic hears the speaker.
+        self._aec = None
+        if settings.echo_cancellation:
+            from .aec import EchoCanceller
+
+            filter_len = int(settings.input_sample_rate * settings.aec_filter_ms / 1000)
+            self._aec = EchoCanceller(settings.frame_size, filter_len, settings.aec_mu)
+            self._speaker.enable_reference()
+            print(f"🔇 Acoustic echo cancellation ON ({settings.aec_filter_ms}ms filter)", flush=True)
+
         # The task handling the current turn (STT -> LLM -> TTS). Cancelled on
         # barge-in so a new turn can take over immediately.
         self._response_task: asyncio.Task | None = None
@@ -193,11 +204,18 @@ class VoiceBot:
             if self._bot_speaking and not settings.allow_interruptions:
                 continue
 
+            # Acoustic echo cancellation: subtract the bot's played audio from
+            # the mic frame so the VAD/STT see only the user's voice. Pulled in
+            # lock-step with mic frames to stay aligned with what was played.
+            if self._aec is not None:
+                frame = self._aec.process(frame, self._speaker.pull_reference(len(frame)))
+
             # Streaming STT: push live frames so transcription happens while the
-            # user is still talking. Crucially, do NOT feed while the bot is
-            # speaking — if the mic hears the bot (echo / a loopback input
-            # device), feeding it would transcribe the bot and answer itself.
-            if self._stt_streaming and not self._bot_speaking:
+            # user is still talking. Don't feed while the bot is speaking unless
+            # AEC is on — otherwise the mic's echo of the bot would be
+            # transcribed and answered. With AEC the echo is removed, so we can
+            # feed during bot speech and get true barge-in transcription.
+            if self._stt_streaming and (not self._bot_speaking or self._aec is not None):
                 await self._stt.feed(frame)
 
             result = self._vad.process(frame)

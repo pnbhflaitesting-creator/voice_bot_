@@ -94,6 +94,43 @@ class SpeakerStream:
         self._done_event: threading.Event | None = None
         self._running = True
         self._thread = threading.Thread(target=self._worker, daemon=True)
+        # Reference tap for acoustic echo cancellation: a FIFO of the played
+        # audio, resampled to the mic rate. Only built when enabled.
+        self._ref_enabled = False
+        self._ref = np.zeros(0, dtype=np.float32)
+        self._ref_lock = threading.Lock()
+        self._ref_max = settings.input_sample_rate  # cap at ~1s
+
+    def enable_reference(self) -> None:
+        """Start capturing played audio as an AEC reference (mic sample rate)."""
+        self._ref_enabled = True
+
+    def pull_reference(self, n: int) -> np.ndarray:
+        """Return the next ``n`` reference samples (played audio @ mic rate),
+        zero-padded if fewer are available. Consumed in lock-step with mic
+        frames so the reference stays aligned with what the mic just heard."""
+        with self._ref_lock:
+            if self._ref.size >= n:
+                out = self._ref[:n]
+                self._ref = self._ref[n:]
+            else:
+                out = np.concatenate([self._ref, np.zeros(n - self._ref.size, np.float32)])
+                self._ref = np.zeros(0, dtype=np.float32)
+        return out
+
+    def _append_reference(self, samples: np.ndarray) -> None:
+        # Resample the played int16 (24 kHz) chunk to float32 at the mic rate.
+        x = samples.astype(np.float32) / 32768.0
+        m = int(round(x.size * settings.input_sample_rate / settings.output_sample_rate))
+        if m <= 0:
+            return
+        ref16 = np.interp(
+            np.linspace(0, x.size - 1, m), np.arange(x.size), x
+        ).astype(np.float32)
+        with self._ref_lock:
+            self._ref = np.concatenate([self._ref, ref16])
+            if self._ref.size > self._ref_max:  # keep the most recent ~1s
+                self._ref = self._ref[-self._ref_max:]
 
     # -- lifecycle ---------------------------------------------------------
     def start(self) -> None:
@@ -135,6 +172,8 @@ class SpeakerStream:
         """
         self._interrupt.set()
         self._carry = b""
+        with self._ref_lock:  # nothing more will be played -> drop the reference
+            self._ref = np.zeros(0, dtype=np.float32)
         # Drain anything pending.
         try:
             while True:
@@ -172,6 +211,8 @@ class SpeakerStream:
             usable = len(data) - (len(data) % 2)
             self._carry = data[usable:]
             samples = np.frombuffer(data[:usable], dtype=np.int16)
+            if self._ref_enabled and samples.size:
+                self._append_reference(samples)
             # Write in small sub-chunks, checking for interruption between each
             # so a barge-in stops playback almost immediately.
             for start in range(0, len(samples), self._SUBCHUNK):

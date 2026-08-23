@@ -80,10 +80,15 @@ Built with FastAPI + a WebSocket; no build step, no external assets.
 
 Then just talk. Pause when you're done and the bot will reply. Press **Ctrl+C** to quit.
 
-> 💡 **Use headphones.** Barge-in listens while the bot speaks; without
-> headphones the mic hears the bot's own voice and may interrupt itself (there's
-> no acoustic echo cancellation). Set `ALLOW_INTERRUPTIONS=false` for strict
-> half-duplex if you're on speakers.
+> 💡 **Barge-in needs the mic not to hear the bot.** Best is a headset whose mic
+> is the input device. On a built-in laptop mic (which sits next to the
+> speakers) the bot can interrupt itself. Two options:
+> - `ALLOW_INTERRUPTIONS=false` — strict half-duplex (guaranteed no self-echo).
+> - `ECHO_CANCELLATION=true` + `ALLOW_INTERRUPTIONS=true` — software AEC
+>   (`aec.py`) subtracts the bot's audio from the mic for full-duplex barge-in.
+>   It's a pure-NumPy adaptive filter (~15–20 dB echo reduction, verified on
+>   synthetic echo); a headset still does better, but it makes the built-in mic
+>   usable.
 
 ## Configuration
 
@@ -325,6 +330,7 @@ voice_bot/
 ├── config.py      # env-driven settings + provider selection
 ├── audio_io.py    # mic capture + speaker playback (sounddevice), barge-in
 ├── audio_utils.py # WAV/PCM helpers shared by providers
+├── aec.py         # acoustic echo cancellation (NumPy adaptive filter)
 ├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
 ├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
 ├── agent.py       # agent tools (weather/time/calc/search/memory) + session memory
