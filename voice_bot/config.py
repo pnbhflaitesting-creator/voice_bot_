@@ -120,7 +120,7 @@ class Settings:
 
     # ---- LLM (shared) -------------------------------------------------------
     # Cap the reply length so the LLM doesn't ramble (faster, more responsive).
-    max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 400))
+    max_reply_tokens: int = field(default_factory=lambda: _get_int("MAX_REPLY_TOKENS", 1000))
     # Sampling temperature (0 = deterministic, higher = more varied).
     temperature: float = field(default_factory=lambda: _get_float("TEMPERATURE", 0.2))
     # ---- TTS chunking (how soon the bot starts speaking) --------------------
@@ -142,9 +142,13 @@ class Settings:
     system_prompt: str = field(
         default_factory=lambda: _get(
             "SYSTEM_PROMPT",
-            "You are a helpful, friendly voice assistant. Keep replies short, "
-            "conversational, and easy to speak aloud. Avoid markdown, lists, and "
-            "long numbers unless asked.",
+            "You are a helpful, knowledgeable assistant. Give clear, thorough, "
+            "well-structured answers — explain things fully, like a good essay — "
+            "while staying natural to listen to. When the user asks you to look "
+            "something up, or wants current or real-world information (flights, "
+            "prices, news, facts, people, places, availability), USE the web_search "
+            "tool to find it and summarise what you find — do NOT reply that you "
+            "can't look things up.",
         )
     )
     # Force the assistant to always reply in this language regardless of what
@@ -163,10 +167,11 @@ class Settings:
         if self.agent_enabled:
             prompt += (
                 " You have tools available (weather, current time, a calculator, "
-                "web search, and a memory to remember and recall facts). Use them "
-                "when they help answer accurately. If a tool needs information the "
-                "user hasn't given — like a city for the weather — ask them for it "
-                "first instead of guessing. Keep spoken answers short and natural."
+                "web search, and a memory to remember and recall facts). Prefer "
+                "calling web_search for anything you're unsure of or that needs "
+                "up-to-date information, rather than guessing or declining. If a "
+                "tool needs information the user hasn't given — like a city — ask "
+                "for it first. Since answers are spoken aloud, avoid heavy markdown."
             )
         return prompt
 

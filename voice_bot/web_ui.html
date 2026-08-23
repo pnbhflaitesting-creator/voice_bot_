@@ -51,6 +51,8 @@
   }
   .user .bubble { background: var(--user); color: var(--user-ink); border-bottom-right-radius: 5px; }
   .bot .bubble { background: var(--bot); color: var(--bot-ink); border-bottom-left-radius: 5px; }
+  .bubble code { font-family: ui-monospace, monospace; font-size: .92em; background: rgba(127,127,127,.18); padding: 1px 5px; border-radius: 5px; }
+  .bubble strong { font-weight: 700; }
   .timing { font-size: 11.5px; color: var(--muted); margin: 3px 4px 0; }
   .tool {
     align-self: center; font-size: 12.5px; color: var(--tool); background: transparent;
@@ -109,7 +111,7 @@
   const pill = document.getElementById("pill"), pillText = document.getElementById("pillText");
   const textEl = document.getElementById("text"), sendBtn = document.getElementById("send");
   const pttBtn = document.getElementById("ptt"), hint = document.getElementById("hint");
-  let ws, liveBot = null;  // liveBot: the bubble being streamed into
+  let ws, liveBot = null, liveBotRaw = "";  // the bubble being streamed into + its raw markdown
 
   function connect() {
     ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
@@ -126,9 +128,22 @@
   function atBottom() { return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 80; }
   function scroll() { logEl.scrollTop = logEl.scrollHeight; }
 
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+  // Minimal, safe markdown -> HTML (escape first, then bold/italic/code).
+  function mdToHtml(s) {
+    s = escapeHtml(s);
+    s = s.replace(/(\*\*|__)(.+?)\1/g, "<strong>$2</strong>");
+    s = s.replace(/(?<![\w*])[*_](?!\s)(.+?)(?<!\s)[*_](?![\w*])/g, "<em>$1</em>");
+    s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+    s = s.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+    return s.replace(/\n/g, "<br>");
+  }
   function addBubble(role, text) {
     const row = document.createElement("div"); row.className = "row " + role;
-    const b = document.createElement("div"); b.className = "bubble"; b.textContent = text;
+    const b = document.createElement("div"); b.className = "bubble";
+    if (role === "bot") b.innerHTML = mdToHtml(text); else b.textContent = text;
     row.appendChild(b); logEl.appendChild(row); scroll(); return b;
   }
   function addTool(name, args) {
@@ -151,12 +166,13 @@
     switch (ev.type) {
       case "status": setStatus(ev.status); break;
       case "message":
-        if (ev.role === "bot" && liveBot) { liveBot.textContent = ev.text; liveBot = null; }
+        if (ev.role === "bot" && liveBot) { liveBot.innerHTML = mdToHtml(ev.text); liveBot = null; liveBotRaw = ""; }
         else addBubble(ev.role, ev.text);
         break;
       case "bot_partial":
-        if (!liveBot) liveBot = addBubble("bot", "");
-        liveBot.textContent += (liveBot.textContent ? " " : "") + ev.text; scroll();
+        if (!liveBot) { liveBot = addBubble("bot", ""); liveBotRaw = ""; }
+        liveBotRaw += (liveBotRaw ? " " : "") + ev.text;
+        liveBot.innerHTML = mdToHtml(liveBotRaw); scroll();
         break;
       case "tool": addTool(ev.name, ev.args); break;
       case "timings": addTiming(ev); break;
@@ -167,7 +183,7 @@
   // ---- composer ----
   function submitText() {
     const t = textEl.value.trim(); if (!t) return;
-    send({ type: "user_text", text: t }); textEl.value = ""; liveBot = null;
+    send({ type: "user_text", text: t }); textEl.value = ""; liveBot = null; liveBotRaw = "";
   }
   sendBtn.onclick = submitText;
   textEl.addEventListener("keydown", (e) => { if (e.key === "Enter") submitText(); });

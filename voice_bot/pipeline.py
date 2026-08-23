@@ -27,6 +27,7 @@ from .events import EventBus
 from .llm import create_llm
 from .recorder import TurnRecorder
 from .stt import create_stt
+from .text_utils import speakable
 from .tts import create_tts
 from .vad import TurnDetector, TurnEvent
 
@@ -325,7 +326,10 @@ class VoiceBot:
             reply_parts.append(sentence)
             print(sentence + " ", end="", flush=True)
             self.events.emit({"type": "bot_partial", "text": sentence})
-            async for pcm in self._tts.stream(sentence):
+            spoken = speakable(sentence)  # strip markdown so TTS doesn't read "star star"
+            if not spoken:
+                continue
+            async for pcm in self._tts.stream(spoken):
                 if t_first_audio is None:
                     t_first_audio = time.perf_counter()
                     self._bot_speech_start = t_first_audio  # start echo-guard clock
@@ -418,7 +422,10 @@ class VoiceBot:
         try:
             first = True
             async for sentence in _sentence_chunks(_once()):
-                async for pcm in self._tts.stream(sentence):
+                spoken = speakable(sentence)
+                if not spoken:
+                    continue
+                async for pcm in self._tts.stream(spoken):
                     if first:
                         self._bot_speech_start = time.perf_counter()
                         first = False

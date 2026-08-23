@@ -331,6 +331,7 @@ voice_bot/
 ├── audio_io.py    # mic capture + speaker playback (sounddevice), barge-in
 ├── audio_utils.py # WAV/PCM helpers shared by providers
 ├── aec.py         # acoustic echo cancellation (NumPy adaptive filter)
+├── text_utils.py  # strip markdown from LLM output before TTS
 ├── denoise.py     # optional noise suppression (high-pass + spectral) before STT
 ├── recorder.py    # optional per-turn debug dump (raw/clean audio + transcript)
 ├── agent.py       # agent tools (weather/time/calc/search/memory) + session memory
